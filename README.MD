@@ -1,56 +1,77 @@
-# Grasshopper Optimization for Energy Load Balancing in Smart Grid
+# ⚡ Grasshopper Optimization for Energy Load Balancing in Smart Grid
 
-## Problem Statement
+## 📌 Overview
 
-Modern smart grids face the challenge of **peak load demand**, which increases
-electricity costs, stresses infrastructure, and reduces grid stability.
-This project uses **Machine Learning (Random Forest)** to forecast energy load
-and applies the **Grasshopper Optimization Algorithm (GOA)** to produce an
-optimised load schedule that reduces peak demand, cost, and variance.
+Modern smart grids face critical challenges due to **fluctuating electricity demand**, especially during peak hours. This leads to:
+
+* Increased operational costs
+* Grid instability
+* Higher transmission losses
+
+This project presents an intelligent solution that combines:
+
+* 🤖 **Machine Learning (Random Forest)** for load forecasting
+* 🦗 **Grasshopper Optimization Algorithm (GOA)** for load balancing
+
+The system predicts future energy demand and optimizes load distribution to **reduce peak load, cost, and variance**, ensuring efficient smart grid operation.
 
 ---
 
-## Project Architecture
+## 🎯 Objectives
+
+* Forecast energy load using Machine Learning
+* Optimize load distribution using GOA
+* Reduce peak demand and electricity cost
+* Improve grid stability and efficiency
+* Evaluate performance using key metrics (RMSE, MAE, R², PAR)
+
+---
+
+## 🏗️ System Architecture
 
 ```
 Raw Dataset (CSV)
       │
       ▼
-┌─────────────────┐
-│  Preprocessing  │  ← handle_missing, extract_time_features, normalize
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Random Forest   │  ← train, evaluate (RMSE / MAE / R²), save .pkl
-│  Forecasting    │
-└────────┬────────┘
-         │  predicted load
-         ▼
-┌─────────────────┐
-│      GOA        │  ← swarm optimises load schedule
-│  Optimisation   │     Fitness = w1·Peak + w2·Cost + w3·Variance
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   Evaluation    │  ← Peak Load, Cost, PAR, Variance (before vs after)
-└────────┬────────┘
-         │
-         ▼
-   results/*.png   +   models/*.pkl
+┌────────────────────────┐
+│   Data Preprocessing   │
+│  - Missing handling    │
+│  - Feature extraction  │
+│  - Normalization       │
+└──────────┬─────────────┘
+           │
+           ▼
+┌────────────────────────┐
+│  ML Load Forecasting   │
+│  (Random Forest Model) │
+└──────────┬─────────────┘
+           │
+           ▼
+┌────────────────────────┐
+│   GOA Optimization     │
+│  (Load Scheduling)     │
+└──────────┬─────────────┘
+           │
+           ▼
+┌────────────────────────┐
+│   Evaluation Metrics   │
+│ (PAR, Cost, Variance)  │
+└──────────┬─────────────┘
+           │
+           ▼
+     Results & Graphs
 ```
 
 ---
 
-## Folder Structure
+## 📁 Project Structure
 
 ```
 SmartGrid-GOA-LoadBalancing/
 ├── dataset/
-│   └── smartgrid.csv               ← synthetic hourly smart-grid data
+│   └── smartgrid.csv
 ├── models/
-│   └── load_forecast_model.pkl     ← trained Random Forest model
+│   └── load_forecast_model.pkl
 ├── notebooks/
 │   └── smartgrid_load_prediction.ipynb
 ├── results/
@@ -62,112 +83,170 @@ SmartGrid-GOA-LoadBalancing/
 │   ├── forecasting_model.py
 │   ├── goa_optimization.py
 │   └── evaluation.py
-├── generate_dataset.py             ← run once to create the CSV
+├── generate_dataset.py
+├── main.py
 ├── README.md
 └── requirements.txt
 ```
 
 ---
 
-## Installation
+## ⚙️ Installation
 
 ```bash
-# 1. Clone / download the project
+git clone https://github.com/your-username/SmartGrid-GOA-LoadBalancing.git
 cd SmartGrid-GOA-LoadBalancing
 
-# 2. (Optional) create a virtual environment
+# Create virtual environment (recommended)
 python -m venv venv
-venv\Scripts\activate        # Windows
-# source venv/bin/activate   # macOS / Linux
+venv\Scripts\activate   # Windows
 
-# 3. Install dependencies
+# Install dependencies
 pip install -r requirements.txt
 ```
 
 ---
 
-## How to Run
+## ▶️ How to Run
 
-### Option A — Jupyter Notebook (recommended)
+### 🟢 Option 1: Jupyter Notebook (Recommended)
 
 ```bash
 jupyter notebook notebooks/smartgrid_load_prediction.ipynb
 ```
 
-Run all cells top-to-bottom. The notebook:
-1. Generates the dataset (if missing)
-2. Preprocesses data
-3. Trains and evaluates the Random Forest model
-4. Runs GOA optimisation
-5. Saves all result plots to `results/`
+Run all cells sequentially to:
 
-### Option B — Individual scripts (VS Code / terminal)
+* Load and preprocess data
+* Train ML model
+* Evaluate performance
+* Apply GOA optimization
+* Visualize results
+
+---
+
+### 🔵 Option 2: Full Pipeline (main.py)
 
 ```bash
-# Step 1 – generate dataset
+python main.py
+```
+
+---
+
+### 🟡 Option 3: Step-by-Step Execution
+
+```bash
 python generate_dataset.py
-
-# Step 2 – preprocess
 python src/preprocessing.py
-
-# Step 3 – train model
 python src/forecasting_model.py
-
-# Step 4 – run GOA
 python src/goa_optimization.py
-
-# Step 5 – evaluate
 python src/evaluation.py
 ```
 
 ---
 
-## Dataset Description
+## 📊 Dataset Description
 
-| Column      | Description                        | Unit   |
-|-------------|------------------------------------|--------|
-| datetime    | Hourly timestamp                   | –      |
-| load        | Energy consumption                 | kWh    |
-| price       | Electricity price                  | $/kWh  |
-| temperature | Ambient temperature                | °C     |
+| Feature     | Description               | Unit  |
+| ----------- | ------------------------- | ----- |
+| datetime    | Timestamp (hourly)        | —     |
+| load        | Energy consumption        | kWh   |
+| price       | Electricity price         | $/kWh |
+| temperature | Environmental temperature | °C    |
 
-1 000 hourly records (≈ 42 days) with realistic daily and seasonal patterns.
+* ~1000 records
+* Includes daily and seasonal variations
 
 ---
 
-## Results
+## 📈 Model Performance
+
+| Metric | Value        |
+| ------ | ------------ |
+| RMSE   | ~17–18 kWh   |
+| MAE    | ~14 kWh      |
+| R²     | ~0.84 – 0.89 |
+
+> R² score indicates that the model explains ~85–90% of variance in energy load.
+
+---
+
+## ⚡ Optimization Results (GOA)
 
 | Metric     | Before GOA | After GOA | Improvement |
-|------------|-----------|-----------|-------------|
-| Peak Load  | ~380 kWh  | ~310 kWh  | ↓ ~18 %     |
-| Total Cost | ~$42      | ~$35      | ↓ ~17 %     |
-| PAR        | ~1.65     | ~1.35     | ↓ ~18 %     |
-| Variance   | ~3 200    | ~2 100    | ↓ ~34 %     |
-
-> Exact numbers depend on the random seed and GOA hyper-parameters.
-
-### Visualisations
-
-- **before_optimization.png** – original predicted load curve
-- **after_optimization.png** – GOA-optimised load curve
-- **cost_comparison.png** – bar chart comparing cost before vs after
+| ---------- | ---------- | --------- | ----------- |
+| Peak Load  | ~380 kWh   | ~310 kWh  | ↓ ~18%      |
+| Total Cost | ~$42       | ~$35      | ↓ ~17%      |
+| PAR        | ~1.65      | ~1.35     | ↓ ~18%      |
+| Variance   | ~3200      | ~2100     | ↓ ~34%      |
 
 ---
 
-## Key Technologies
+## 📊 Visual Outputs
 
-| Component        | Library / Algorithm          |
-|------------------|------------------------------|
-| Data handling    | pandas, numpy                |
-| ML model         | scikit-learn RandomForest    |
-| Optimisation     | GOA (custom implementation)  |
-| Visualisation    | matplotlib                   |
-| Model persistence| joblib                       |
+* 📉 Load curve before optimization
+* 📈 Load curve after optimization
+* 💰 Cost comparison chart
+
+(All saved in `results/` directory)
 
 ---
 
-## References
+## 🛠️ Tech Stack
 
-- Saremi, S., Mirjalili, S., & Lewis, A. (2017). *Grasshopper Optimisation
-  Algorithm: Theory and Application.* Advances in Engineering Software, 105, 30-47.
-- Breiman, L. (2001). *Random Forests.* Machine Learning, 45(1), 5-32.
+| Component       | Technology                         |
+| --------------- | ---------------------------------- |
+| Programming     | Python                             |
+| Data Processing | pandas, numpy                      |
+| ML Model        | Random Forest (scikit-learn)       |
+| Optimization    | Grasshopper Optimization Algorithm |
+| Visualization   | matplotlib                         |
+| Model Storage   | joblib                             |
+
+---
+
+## 🔍 Key Features
+
+* Modular project structure
+* End-to-end ML + optimization pipeline
+* Realistic synthetic dataset generation
+* Advanced evaluation metrics
+* Visual performance comparison
+
+---
+
+## ⚠️ Limitations
+
+* Synthetic dataset (not real-time grid data)
+* GOA performance depends on parameter tuning
+* No real-time IoT integration
+
+---
+
+## 🚀 Future Scope
+
+* Integration with real-time smart meters
+* Use of deep learning models (LSTM, XGBoost)
+* Hybrid optimization techniques (GOA + PSO)
+* Web-based dashboard deployment
+
+---
+
+## 📚 References
+
+* Saremi et al. (2017) – Grasshopper Optimization Algorithm
+* Breiman (2001) – Random Forests
+
+---
+
+## 👨‍💻 Author
+
+**Ansh Tripathi**
+B.Tech CSE (AI/ML)
+Lovely Professional University
+
+---
+
+## ⭐ If you like this project
+
+Give it a ⭐ on GitHub and share your feedback!
