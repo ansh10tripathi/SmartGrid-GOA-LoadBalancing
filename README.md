@@ -248,6 +248,12 @@ python src/evaluation.py
 
 ---
 
+## 📜 License
+
+This project is licensed under the MIT License.
+
+---
+
 ## 👨‍💻 Author
 
 **Ansh Tripathi**
