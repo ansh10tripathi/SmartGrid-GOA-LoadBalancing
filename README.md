@@ -1,5 +1,14 @@
 # ⚡ Grasshopper Optimization for Energy Load Balancing in Smart Grid
 
+![Python](https://img.shields.io/badge/Python-3.10-blue)
+![Machine Learning](https://img.shields.io/badge/Machine%20Learning-Random%20Forest-green)
+![Optimization](https://img.shields.io/badge/Optimization-GOA-orange)
+![Status](https://img.shields.io/badge/Status-Completed-brightgreen)
+![License](https://img.shields.io/badge/License-MIT-lightgrey)
+![GitHub repo size](https://img.shields.io/github/repo-size/ansh10tripathi/SmartGrid-GOA-LoadBalancing)
+![GitHub last commit](https://img.shields.io/github/last-commit/ansh10tripathi/SmartGrid-GOA-LoadBalancing)
+![GitHub stars](https://img.shields.io/github/stars/ansh10tripathi/SmartGrid-GOA-LoadBalancing?style=social)
+
 ## 📌 Overview
 
 Modern smart grids face critical challenges due to **fluctuating electricity demand**, especially during peak hours. This leads to:
