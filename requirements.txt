@@ -4,5 +4,6 @@ matplotlib
 scikit-learn
 scipy
 joblib
+xgboost
 notebook
 ipykernel
