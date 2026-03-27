@@ -3,18 +3,18 @@ src/evaluation.py
 -----------------
 Two evaluation layers:
 
-  1. ML Model Performance  – RMSE, MAE, R²  (evaluate_model_performance)
-  2. Grid KPIs             – Peak Load, Cost, PAR, Variance (compare_before_after)
+  1. ML Model Performance  - RMSE, MAE, R2  (evaluate_model_performance)
+  2. Grid KPIs             - Peak Load, Cost, PAR, Variance (compare_before_after)
 
 Metric reference
 ----------------
-  RMSE  – Root Mean Square Error: average prediction error in the same unit as
+  RMSE  - Root Mean Square Error: average prediction error in the same unit as
           load (kWh). Penalises large errors more than MAE. Lower is better.
 
-  MAE   – Mean Absolute Error: average absolute deviation between actual and
+  MAE   - Mean Absolute Error: average absolute deviation between actual and
           predicted load (kWh). Easier to interpret than RMSE. Lower is better.
 
-  R²    – Coefficient of Determination: proportion of variance in the target
+  R2    - Coefficient of Determination: proportion of variance in the target
           explained by the model. Range [0, 1]; closer to 1 is better.
 
   Peak Load  – maximum load in the schedule (kWh)
@@ -31,12 +31,11 @@ matplotlib.use("Agg")          # file-safe backend
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-RESULTS_DIR = "results"
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+RESULTS_DIR = os.path.join(os.path.dirname(_SRC_DIR), "results")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# LAYER 1 – ML Model Performance
-# ══════════════════════════════════════════════════════════════════════════════
+# LAYER 1 - ML Model Performance
 
 def evaluate_model_performance(
     y_test,
@@ -46,7 +45,7 @@ def evaluate_model_performance(
     n_display: int = 100,
 ) -> dict:
     """
-    Calculate RMSE, MAE, and R² for a regression model and plot
+    Calculate RMSE, MAE, and R2 for a regression model and plot
     Actual vs Predicted values.
 
     Parameters
@@ -85,11 +84,11 @@ def evaluate_model_performance(
     print("        REGRESSION MODEL PERFORMANCE METRICS")
     print("=" * 55)
     print(f"  RMSE  (Root Mean Square Error) : {rmse:>10.4f} kWh")
-    print(f"        → avg error penalising large deviations")
+    print(f"        -> avg error penalising large deviations")
     print(f"  MAE   (Mean Absolute Error)    : {mae:>10.4f} kWh")
-    print(f"        → avg absolute prediction error")
-    print(f"  R²    (Coefficient of Det.)    : {r2:>10.4f}")
-    print(f"        → {r2*100:.1f}% of load variance explained by model")
+    print(f"        -> avg absolute prediction error")
+    print(f"  R2    (Coefficient of Det.)    : {r2:>10.4f}")
+    print(f"        -> {r2*100:.1f}% of load variance explained by model")
     print("=" * 55)
 
     # ── Plot Actual vs Predicted ──────────────────────────────────────────────
@@ -106,7 +105,7 @@ def evaluate_model_performance(
                  color="tomato",    linewidth=1.6, linestyle="--")
     axes[0].set_title(
         f"Actual vs Predicted Energy Load  "
-        f"(RMSE={rmse:.2f} | MAE={mae:.2f} | R²={r2:.4f})",
+        f"(RMSE={rmse:.2f} | MAE={mae:.2f} | R2={r2:.4f})",
         fontsize=11,
     )
     axes[0].set_ylabel("Load (kWh)")
@@ -120,22 +119,23 @@ def evaluate_model_performance(
     axes[1].axhline(0, color="black", linewidth=0.8)
     axes[1].set_xlabel("Sample Index")
     axes[1].set_ylabel("Residual (kWh)")
-    axes[1].set_title("Residuals (Actual − Predicted)", fontsize=10)
+    axes[1].set_title("Residuals (Actual - Predicted)", fontsize=10)
     axes[1].grid(axis="y", alpha=0.3)
 
     plt.tight_layout()
 
     if save_plot:
         os.makedirs(RESULTS_DIR, exist_ok=True)
-        out_path = os.path.join(RESULTS_DIR, plot_filename)
+        out_path = os.path.abspath(os.path.join(RESULTS_DIR, plot_filename))
         plt.savefig(out_path, dpi=150)
-        print(f"[evaluate_model_performance] Plot saved → {out_path}")
-
-    plt.show()
+        print(f"[evaluate_model_performance] Plot saved -> {out_path}")
+        plt.close()
+        if os.name == "nt":
+            os.startfile(out_path)
     return metrics
 
 
-# ── 1. Individual metrics ─────────────────────────────────────────────────────
+# -- 1. Individual metrics
 
 def peak_load(schedule: np.ndarray) -> float:
     return float(np.max(schedule))
@@ -155,7 +155,7 @@ def variance(schedule: np.ndarray) -> float:
     return float(np.var(schedule))
 
 
-# ── 2. Full metrics dict ──────────────────────────────────────────────────────
+# -- 2. Full metrics dict
 
 def compute_metrics(schedule: np.ndarray, price: np.ndarray, label: str = "") -> dict:
     """
@@ -172,7 +172,7 @@ def compute_metrics(schedule: np.ndarray, price: np.ndarray, label: str = "") ->
     return metrics
 
 
-# ── 3. Comparison ─────────────────────────────────────────────────────────────
+# -- 3. Comparison
 
 def compare_before_after(
     before_schedule: np.ndarray,
@@ -196,7 +196,7 @@ def compare_before_after(
             "Before GOA":    b_val,
             "After GOA":     a_val,
             "Change (%)":    round(change_pct, 2),
-            "Improved":      "✅" if a_val < b_val else "❌",
+            "Improved":      "YES" if a_val < b_val else "NO",
         })
 
     df = pd.DataFrame(rows)
@@ -209,20 +209,17 @@ def compare_before_after(
     return df
 
 
-# ── Quick test ────────────────────────────────────────────────────────────────
+
+# -- Quick test
 if __name__ == "__main__":
     np.random.seed(0)
     n = 100
-
-    # Simulate model predictions
     y_test_demo = np.random.uniform(150, 380, n)
-    y_pred_demo = y_test_demo + np.random.normal(0, 18, n)   # add noise
+    y_pred_demo = y_test_demo + np.random.normal(0, 18, n)
 
-    # Layer 1 – ML metrics
     ml_metrics = evaluate_model_performance(y_test_demo, y_pred_demo)
     print("\nReturned metrics dict:", ml_metrics)
 
-    # Layer 2 – Grid KPIs
     price = np.random.uniform(0.08, 0.15, n)
     after = y_pred_demo * np.random.uniform(0.85, 0.98, n)
     df    = compare_before_after(y_pred_demo, after, price)
