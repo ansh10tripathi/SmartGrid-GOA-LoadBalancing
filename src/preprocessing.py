@@ -1,15 +1,20 @@
 """
 src/preprocessing.py
 --------------------
-Enhanced feature engineering pipeline targeting R² ≥ 0.95.
+Feature engineering pipeline for the DUQ_hourly.csv dataset.
 
-New features added vs v1
-------------------------
-  • Cyclical encoding  : hour_sin / hour_cos  (avoids 23→0 discontinuity)
-  • Lag features       : lag_1, lag_2, lag_3  (previous-hour load values)
-  • Rolling mean       : rolling_mean_24      (24-hour moving average)
-  • day_of_week        : explicit 0-6 column  (renamed from 'day')
-  • is_weekend         : binary flag
+Dataset columns: Datetime, DUQ_MW  (~119 K hourly rows, 2005-2018)
+
+Features built
+--------------
+  • hour_sin / hour_cos   – cyclical hour encoding (avoids 23→0 discontinuity)
+  • day_of_week           – 0 = Monday … 6 = Sunday
+  • month                 – 1-12
+  • is_weekend            – binary flag
+  • tou_price             – time-of-use price proxy derived from hour
+                            (peak 08-20 h → 0.13 $/kWh, off-peak → 0.08 $/kWh)
+  • lag_1 / lag_2 / lag_3 – load 1/2/3 hours ago  (biggest R² driver)
+  • rolling_mean_24       – 24-hour rolling mean of load
 """
 
 import pandas as pd
@@ -23,8 +28,7 @@ FEATURE_COLS = [
     "day_of_week",            # 0 = Monday … 6 = Sunday
     "month",
     "is_weekend",
-    "price",
-    "temperature",
+    "tou_price",              # time-of-use price proxy ($/kWh)
     "lag_1",                  # load 1 hour ago
     "lag_2",                  # load 2 hours ago
     "lag_3",                  # load 3 hours ago
@@ -35,8 +39,21 @@ FEATURE_COLS = [
 # ── 1. Load ───────────────────────────────────────────────────────────────────
 
 def load_data(filepath: str) -> pd.DataFrame:
-    df = pd.read_csv(filepath, parse_dates=["datetime"])
-    print(f"[load_data] {len(df)} rows, {df.shape[1]} columns.")
+    df = pd.read_csv(filepath)
+
+    df.rename(columns={
+        "Datetime": "datetime",
+        "DUQ_MW":   "load"
+    }, inplace=True)
+
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    df = df.sort_values("datetime").reset_index(drop=True)
+
+    # Time-of-use price proxy: peak hours (08-20) cost more
+    hour = df["datetime"].dt.hour
+    df["tou_price"] = np.where((hour >= 8) & (hour <= 20), 0.13, 0.08)
+
+    print(f"[load_data] {len(df):,} rows, {df.shape[1]} columns.")
     return df
 
 
@@ -57,30 +74,22 @@ def extract_time_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     hour = df["datetime"].dt.hour
 
-    # Cyclical encoding: maps hour 0 and hour 23 as neighbours
-    df["hour_sin"] = np.sin(2 * np.pi * hour / 24)
-    df["hour_cos"] = np.cos(2 * np.pi * hour / 24)
-
-    df["day_of_week"] = df["datetime"].dt.dayofweek   # 0=Mon … 6=Sun
+    df["hour_sin"]   = np.sin(2 * np.pi * hour / 24)
+    df["hour_cos"]   = np.cos(2 * np.pi * hour / 24)
+    df["day_of_week"] = df["datetime"].dt.dayofweek
     df["month"]       = df["datetime"].dt.month
     df["is_weekend"]  = (df["day_of_week"] >= 5).astype(int)
 
-    print("[extract_time_features] Added: hour_sin, hour_cos, day_of_week, "
-          "month, is_weekend")
+    print("[extract_time_features] Added: hour_sin, hour_cos, day_of_week, month, is_weekend")
     return df
 
 
 def add_lag_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add lag_1 / lag_2 / lag_3 (previous-hour load) and a 24-hour
-    rolling mean.  Rows with NaN lags are dropped.
-    """
     df = df.copy()
     df["lag_1"] = df[TARGET_COL].shift(1)
     df["lag_2"] = df[TARGET_COL].shift(2)
     df["lag_3"] = df[TARGET_COL].shift(3)
 
-    # 24-hour rolling mean (min_periods=1 keeps early rows, then we drop NaN lags)
     df["rolling_mean_24"] = (
         df[TARGET_COL].rolling(window=24, min_periods=1).mean()
     )
@@ -88,17 +97,13 @@ def add_lag_features(df: pd.DataFrame) -> pd.DataFrame:
     before = len(df)
     df = df.dropna(subset=["lag_1", "lag_2", "lag_3"]).reset_index(drop=True)
     print(f"[add_lag_features] Added lag_1/2/3 + rolling_mean_24. "
-          f"Dropped {before - len(df)} NaN rows → {len(df)} remain.")
+          f"Dropped {before - len(df)} NaN rows -> {len(df):,} remain.")
     return df
 
 
 # ── 4. Normalize ──────────────────────────────────────────────────────────────
 
 def normalize_features(df: pd.DataFrame):
-    """
-    MinMax-scale all feature columns.
-    Returns (X_scaled_df, y_series, fitted_scaler).
-    """
     scaler = MinMaxScaler()
     X = df[FEATURE_COLS].copy()
     y = df[TARGET_COL].copy()
@@ -106,8 +111,7 @@ def normalize_features(df: pd.DataFrame):
     X_scaled = scaler.fit_transform(X)
     X_df = pd.DataFrame(X_scaled, columns=FEATURE_COLS, index=df.index)
 
-    print(f"[normalize_features] Scaled {len(FEATURE_COLS)} features: "
-          f"{FEATURE_COLS}")
+    print(f"[normalize_features] Scaled {len(FEATURE_COLS)} features: {FEATURE_COLS}")
     return X_df, y, scaler
 
 
@@ -128,7 +132,9 @@ def preprocess(filepath: str):
 
 # ── Quick test ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    X, y, scaler, df = preprocess("dataset/smartgrid.csv")
+    import os as _os
+    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    X, y, scaler, df = preprocess(_os.path.join(_root, "dataset", "DUQ_hourly.csv"))
     print(f"\nFeature matrix : {X.shape}")
     print(f"Target vector  : {y.shape}")
     print(X.head(3).to_string())
