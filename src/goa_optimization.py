@@ -5,10 +5,14 @@ Grasshopper Optimization Algorithm (GOA) for energy load scheduling.
 
 Reference:
   Saremi, S., Mirjalili, S., & Lewis, A. (2017).
-  "Grasshopper Optimisation Algorithm: Theory and Application."
+  Grasshopper Optimisation Algorithm: Theory and Application.
   Advances in Engineering Software, 105, 30-47.
 
-Fitness = w1 * PeakLoad  +  w2 * Cost  +  w3 * Variance
+Fitness (normalised, minimise):
+  0.35 * peak_norm  +  0.25 * par_norm  +  0.25 * cost_norm  +  0.15 * var_norm
+
+All terms are normalised against the reference (predicted) load so they are
+comparable regardless of absolute load magnitude.
 """
 
 import numpy as np
@@ -29,15 +33,13 @@ def _s_function(r: np.ndarray, f: float = 0.5, l: float = 1.5) -> np.ndarray:
 
 
 def _fitness(schedule: np.ndarray, price: np.ndarray,
-             w1: float, w2: float, w3: float) -> float:
-    """
-    Composite fitness (lower is better).
-      w1 * peak_load  +  w2 * total_cost  +  w3 * variance
-    """
-    peak     = np.max(schedule)
-    cost     = np.sum(schedule * price)
-    variance = np.var(schedule)
-    return w1 * peak + w2 * cost + w3 * variance
+             ref_peak: float, ref_cost: float, ref_var: float, ref_par: float) -> float:
+    peak_norm = np.max(schedule) / ref_peak
+    cost_norm = np.sum(schedule * price) / ref_cost
+    var_norm  = np.var(schedule) / ref_var
+    mean = np.mean(schedule)
+    par_norm  = (np.max(schedule) / mean if mean != 0 else 1.0) / ref_par
+    return 0.35 * peak_norm + 0.25 * cost_norm + 0.15 * var_norm + 0.25 * par_norm
 
 
 def grasshopper_optimization(
@@ -45,13 +47,8 @@ def grasshopper_optimization(
     price:          np.ndarray,
     n_grasshoppers: int   = 30,
     max_iter:       int   = 100,
-    w1: float = 0.4,
-    w2: float = 0.3,
-    w3: float = 0.3,
     c_min: float = 0.00004,
     c_max: float = 1.0,
-    lb_factor: float = 0.80,   # lower bound = 80 % of predicted load
-    ub_factor: float = 1.20,   # upper bound = 120 % of predicted load
     random_state: int = 42,
 ) -> dict:
     """
@@ -63,10 +60,7 @@ def grasshopper_optimization(
     price          : 1-D array of electricity prices ($/kWh), same length
     n_grasshoppers : swarm size
     max_iter       : number of iterations
-    w1, w2, w3     : fitness weights (peak, cost, variance)
-    c_min / c_max  : comfort-factor bounds (from original paper)
-    lb_factor      : lower bound as fraction of predicted load
-    ub_factor      : upper bound as fraction of predicted load
+    c_min / c_max  : comfort-factor bounds (from original paper, Eq. 2.8)
 
     Returns
     -------
@@ -78,18 +72,30 @@ def grasshopper_optimization(
     np.random.seed(random_state)
 
     dim = len(predicted_load)
-    lb  = predicted_load * lb_factor   # shape (dim,)
-    ub  = predicted_load * ub_factor   # shape (dim,)
+    # Non-uniform bounds: high-load steps can drop more (lb=0.75x),
+    # low-load steps are held up (lb=0.90x) — flattens curve, reduces PAR
+    load_norm = ((predicted_load - predicted_load.min()) /
+                 (predicted_load.max() - predicted_load.min() + 1e-10))
+    lb = predicted_load * (0.90 - 0.15 * load_norm)
+    ub = predicted_load * 1.00   # never exceed predicted load
 
     # ── Initialise grasshopper positions uniformly in [lb, ub] ──────────────
     # positions shape: (n_grasshoppers, dim)
     positions = lb + np.random.rand(n_grasshoppers, dim) * (ub - lb)
 
+    # Reference values from predicted load for normalization
+    ref_peak = float(np.max(predicted_load))
+    ref_cost = float(np.sum(predicted_load * price))
+    ref_var  = float(np.var(predicted_load))
+    ref_par  = float(np.max(predicted_load) / np.mean(predicted_load))
+    if ref_var == 0:
+        ref_var = 1.0
+
+    def fitness(s):
+        return _fitness(s, price, ref_peak, ref_cost, ref_var, ref_par)
+
     # Evaluate initial fitness
-    fitness_vals = np.array([
-        _fitness(positions[i], price, w1, w2, w3)
-        for i in range(n_grasshoppers)
-    ])
+    fitness_vals = np.array([fitness(positions[i]) for i in range(n_grasshoppers)])
 
     best_idx      = np.argmin(fitness_vals)
     best_pos      = positions[best_idx].copy()
@@ -123,16 +129,21 @@ def grasshopper_optimization(
                 social_sum += c * ((ub - lb) / 2) * s_val * direction
 
             # Position update (Eq. 2.7): social interaction + attraction to target
-            new_positions[i] = social_sum + best_pos
+            # Add exploration + current position influence
+            new_positions[i] = (
+                c * social_sum +
+                0.5 * positions[i] +
+                0.5 * best_pos
+            )
+            # 🔥 Add randomness (VERY IMPORTANT)
+            noise = np.random.normal(0, 0.01, dim)
+            new_positions[i] += noise
 
         # Clip to bounds
         positions = np.clip(new_positions, lb, ub)
 
         # Re-evaluate fitness
-        fitness_vals = np.array([
-            _fitness(positions[i], price, w1, w2, w3)
-            for i in range(n_grasshoppers)
-        ])
+        fitness_vals = np.array([fitness(positions[i]) for i in range(n_grasshoppers)])
 
         current_best_idx = np.argmin(fitness_vals)
         if fitness_vals[current_best_idx] < best_fitness:
