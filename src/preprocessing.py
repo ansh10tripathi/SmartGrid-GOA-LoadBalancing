@@ -126,6 +126,9 @@ def preprocess(filepath: str):
     df = handle_missing(df)
     df = extract_time_features(df)
     df = add_lag_features(df)
+
+    df.to_csv("dataset/processed_features.csv", index=False)
+    
     X, y, scaler = normalize_features(df)
     return X, y, scaler, df
 
