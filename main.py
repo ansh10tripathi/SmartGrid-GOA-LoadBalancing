@@ -7,6 +7,7 @@ Usage:  python main.py
 
 import os
 import numpy as np
+import joblib
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -35,6 +36,8 @@ def main():
     print("\nStep 1: Preprocessing...")
     _root = os.path.dirname(os.path.abspath(__file__))
     X, y, scaler, raw_df = preprocess(os.path.join(_root, "dataset", "DUQ_hourly.csv"))
+    joblib.dump(scaler, os.path.join(_root, "models", "minmax_scaler.pkl"))
+    print("  MinMaxScaler saved -> models/minmax_scaler.pkl")
 
     # ── Step 2: Train RF + SVR + XGBoost, compare, pick best ────────────────
     print("\nStep 2: Training & Comparing Models (RF, SVR, XGBoost)...")
@@ -186,3 +189,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
