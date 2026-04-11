@@ -5,11 +5,14 @@ ML pipeline for the DUQ_hourly dataset (~119 K rows).
 
 Models
 ------
-  - Random Forest  (existing, unchanged)
-  - SVR            (new)
-  - XGBoost        (new)
+  - Random Forest
+  - SVR
+  - XGBoost
 
-Best model is selected automatically by highest R² and used for GOA.
+Hyperparameter tuning uses TimeSeriesSplit(n_splits=5) to prevent
+future-data leakage that shuffled CV causes on temporal data.
+
+Best model is selected automatically by highest R² and saved for GOA.
 """
 
 import os
@@ -18,110 +21,159 @@ import joblib
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import RandomizedSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from xgboost import XGBRegressor
 from src.evaluation import evaluate_model_performance
 
-_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+_SRC_DIR   = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(os.path.dirname(_SRC_DIR), "models", "load_forecast_model.pkl")
 
-
-# ── 1. Time-based split ───────────────────────────────────────────────────────
-
-def split_data(X, y, test_size: float = 0.2):
-    """Strict chronological split — no shuffling to prevent future-data leakage."""
-    split_idx = int(len(X) * (1 - test_size))
-    X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-    y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
-    print(f"[split_data] Train={len(X_train):,}, Test={len(X_test):,} "
-          f"(time-based, no shuffle)")
-    return X_train, X_test, y_train, y_test
+# Shared CV strategy — always train on past, validate on future
+_TS_CV = TimeSeriesSplit(n_splits=5)
 
 
-# ── 2. Train individual models ────────────────────────────────────────────────
+# ── 1. Train individual models ───────────────────────────────────────────────
+
+def _make_pipeline(estimator) -> Pipeline:
+    """Wrap any estimator in StandardScaler → estimator Pipeline."""
+    return Pipeline([("scaler", StandardScaler()), ("model", estimator)])
+
 
 def train_random_forest(X_train, y_train, use_search: bool = True,
-                        random_state: int = 42):
-    """Train a Random Forest (existing logic, unchanged)."""
+                        random_state: int = 42) -> Pipeline:
+    """
+    Returns a fitted Pipeline(StandardScaler → RandomForest).
+    Param keys are prefixed with 'model__' to target the pipeline step.
+    """
+    pipeline = _make_pipeline(
+        RandomForestRegressor(random_state=random_state, n_jobs=1)
+    )
     if use_search:
-        base_rf = RandomForestRegressor(random_state=random_state, n_jobs=1)
         param_dist = {
-            "n_estimators":      [100, 200, 300],
-            "max_depth":         [15, 20, 25],
-            "min_samples_split": [2, 4],
-            "min_samples_leaf":  [1, 2],
-            "max_features":      ["sqrt", "log2"],
+            "model__n_estimators":      [100, 200, 300],
+            "model__max_depth":         [15, 20, 25],
+            "model__min_samples_split": [2, 4],
+            "model__min_samples_leaf":  [1, 2],
+            "model__max_features":      ["sqrt", "log2"],
         }
         search = RandomizedSearchCV(
-            base_rf, param_distributions=param_dist,
-            n_iter=10, cv=3, scoring="r2",
+            pipeline, param_distributions=param_dist,
+            n_iter=10, cv=_TS_CV, scoring="r2",
             random_state=random_state, n_jobs=1, verbose=1,
         )
-        print("[train_random_forest] Running RandomizedSearchCV (10 iter x 3-fold CV)...")
+        print("[train_random_forest] RandomizedSearchCV with TimeSeriesSplit(n_splits=5)...")
         search.fit(X_train, y_train)
-        model = search.best_estimator_
         print(f"[train_random_forest] Best params : {search.best_params_}")
-        print(f"[train_random_forest] Best CV R2  : {search.best_score_:.4f}")
-    else:
-        model = RandomForestRegressor(
-            n_estimators=200, max_depth=20,
-            min_samples_split=2, min_samples_leaf=1,
-            max_features="sqrt", random_state=random_state, n_jobs=1,
+        print(f"[train_random_forest] Best CV R²  : {search.best_score_:.4f}")
+        return search.best_estimator_
+    pipeline.fit(X_train, y_train)
+    print("[train_random_forest] Trained fixed-param RandomForest pipeline.")
+    return pipeline
+
+
+# SVR is O(n²) in memory and O(n³) in time — impractical to CV on 95k rows.
+# Search on a chronological subsample, then refit best params on full data.
+_SVR_SEARCH_ROWS = 5_000
+
+
+def train_svr(X_train, y_train, use_search: bool = True) -> Pipeline:
+    """
+    Returns a fitted Pipeline(StandardScaler → SVR) on the full X_train.
+
+    When use_search=True:
+      1. Take the last _SVR_SEARCH_ROWS rows of X_train (chronological tail)
+         as the search subset — recent data is most representative.
+      2. Run RandomizedSearchCV with TimeSeriesSplit on that subset to find
+         best C / gamma / epsilon.
+      3. Build a fresh pipeline with those best params and fit it on the
+         FULL X_train so the final model sees all training history.
+
+    This keeps CV time to ~2 min instead of hours while still finding
+    good hyperparameters.
+    """
+    if use_search:
+        # ── Step 1: subsample for search (chronological tail) ────────────────
+        n          = len(X_train)
+        sub_X      = X_train.iloc[max(0, n - _SVR_SEARCH_ROWS):]
+        sub_y      = y_train.iloc[max(0, n - _SVR_SEARCH_ROWS):]
+        print(f"[train_svr] SVR search on {len(sub_X):,} rows "
+              f"(last {_SVR_SEARCH_ROWS:,} of {n:,} train rows)...")
+
+        param_dist = {
+            "model__C":       [1, 10, 50, 100, 200],
+            "model__gamma":   [0.001, 0.01, 0.1, "scale", "auto"],
+            "model__epsilon": [0.05, 0.1, 0.2],
+        }
+        search = RandomizedSearchCV(
+            _make_pipeline(SVR(kernel="rbf")),
+            param_distributions=param_dist,
+            n_iter=10, cv=TimeSeriesSplit(n_splits=3),
+            scoring="r2", n_jobs=1, verbose=1,
         )
-        model.fit(X_train, y_train)
-        print("[train_random_forest] Trained fixed-param RandomForest (200 trees, depth=20).")
-    return model
+        search.fit(sub_X, sub_y)
+        best_params = {k.replace("model__", ""): v
+                       for k, v in search.best_params_.items()}
+        print(f"[train_svr] Best params : {search.best_params_}")
+        print(f"[train_svr] Best CV R²  : {search.best_score_:.4f}")
+
+        # ── Step 2: refit on full training data with best params ─────────────
+        print(f"[train_svr] Refitting on full {n:,} train rows...")
+        pipeline = _make_pipeline(SVR(kernel="rbf", **best_params))
+        pipeline.fit(X_train, y_train)
+        print("[train_svr] Full refit complete.")
+        return pipeline
+
+    pipeline = _make_pipeline(SVR(kernel="rbf", C=100, gamma=0.1, epsilon=0.1))
+    pipeline.fit(X_train, y_train)
+    print("[train_svr] Trained fixed-param SVR pipeline.")
+    return pipeline
 
 
-def train_svr(X_train, y_train):
-    """Train SVR with StandardScaler (SVR is sensitive to feature scale)."""
-    print("[train_svr] Fitting StandardScaler + SVR...")
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_train)
-    model = SVR(kernel="rbf", C=100, gamma=0.1, epsilon=0.1)
-    model.fit(X_scaled, y_train)
-    print("[train_svr] SVR training complete.")
-    # Bundle scaler with model so predict() works transparently
-    return {"model": model, "scaler": scaler, "type": "svr"}
-
-
-def train_xgboost(X_train, y_train, random_state: int = 42):
-    """Train XGBoost Regressor."""
-    print("[train_xgboost] Training XGBoost...")
-    model = XGBRegressor(
-        n_estimators=300, max_depth=6, learning_rate=0.05,
-        subsample=0.8, colsample_bytree=0.8,
-        random_state=random_state, n_jobs=1,
-        verbosity=0,
+def train_xgboost(X_train, y_train, use_search: bool = True,
+                  random_state: int = 42) -> Pipeline:
+    """
+    Returns a fitted Pipeline(StandardScaler → XGBoost).
+    Param keys are prefixed with 'model__' to target the XGBoost step.
+    """
+    pipeline = _make_pipeline(
+        XGBRegressor(random_state=random_state, n_jobs=1, verbosity=0)
     )
-    model.fit(X_train, y_train)
-    print("[train_xgboost] XGBoost training complete.")
-    return model
+    if use_search:
+        param_dist = {
+            "model__n_estimators":     [200, 300, 400],
+            "model__max_depth":        [4, 6, 8],
+            "model__learning_rate":    [0.01, 0.05, 0.1],
+            "model__subsample":        [0.7, 0.8, 1.0],
+            "model__colsample_bytree": [0.7, 0.8, 1.0],
+        }
+        search = RandomizedSearchCV(
+            pipeline, param_distributions=param_dist,
+            n_iter=10, cv=_TS_CV, scoring="r2",
+            random_state=random_state, n_jobs=1, verbose=1,
+        )
+        print("[train_xgboost] RandomizedSearchCV with TimeSeriesSplit(n_splits=5)...")
+        search.fit(X_train, y_train)
+        print(f"[train_xgboost] Best params : {search.best_params_}")
+        print(f"[train_xgboost] Best CV R²  : {search.best_score_:.4f}")
+        return search.best_estimator_
+    pipeline.fit(X_train, y_train)
+    print("[train_xgboost] Trained fixed-param XGBoost pipeline.")
+    return pipeline
 
 
-# ── 3. Predict helper (handles SVR bundle) ────────────────────────────────────
+# ── 2. Evaluate — all models are now plain Pipelines, no special-casing ───────
 
-def _predict(model_obj, X):
-    """Return predictions; handles plain sklearn/xgb models and SVR bundles."""
-    if isinstance(model_obj, dict) and model_obj.get("type") == "svr":
-        X_scaled = model_obj["scaler"].transform(X)
-        return model_obj["model"].predict(X_scaled)
-    return model_obj.predict(X)
-
-
-# ── 4. Evaluate a single model ────────────────────────────────────────────────
-
-def evaluate_model(model_obj, X_test, y_test):
-    """Return metrics dict + predictions array."""
-    y_pred = _predict(model_obj, X_test)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    mae  = mean_absolute_error(y_test, y_pred)
-    r2   = r2_score(y_test, y_pred)
+def evaluate_model(pipeline: Pipeline, X_test, y_test):
+    """pipeline.predict() handles scaler + model transparently."""
+    y_pred  = pipeline.predict(X_test)
+    rmse    = np.sqrt(mean_squared_error(y_test, y_pred))
+    mae     = mean_absolute_error(y_test, y_pred)
+    r2      = r2_score(y_test, y_pred)
     metrics = {"RMSE": round(rmse, 4), "MAE": round(mae, 4), "R2": round(r2, 4)}
     print(f"[evaluate_model] RMSE={rmse:.4f}  MAE={mae:.4f}  R2={r2:.4f}")
-    status = "TARGET MET" if r2 >= 0.95 else "below 0.95"
-    print(f"[evaluate_model] R2 >= 0.95 -> {status}")
+    print(f"[evaluate_model] R2 >= 0.95 -> {'TARGET MET' if r2 >= 0.95 else 'below 0.95'}")
     return metrics, y_pred
 
 
@@ -129,21 +181,16 @@ def evaluate_model(model_obj, X_test, y_test):
 
 def compare_models(X_train, X_test, y_train, y_test, use_search: bool = True):
     """
-    Train RF, SVR, XGBoost; evaluate all; print comparison table.
-    Returns (best_model_obj, best_metrics, y_test, best_y_pred, X_test,
-             all_metrics_dict, all_preds_dict).
+    Train RF, SVR, XGBoost with TimeSeriesSplit CV; evaluate all; pick best by R².
     """
-    # --- Train ---
     rf_model  = train_random_forest(X_train, y_train, use_search=use_search)
-    svr_model = train_svr(X_train, y_train)
-    xgb_model = train_xgboost(X_train, y_train)
+    svr_model = train_svr(X_train, y_train, use_search=use_search)
+    xgb_model = train_xgboost(X_train, y_train, use_search=use_search)
 
-    # --- Evaluate ---
     rf_metrics,  y_pred_rf  = evaluate_model(rf_model,  X_test, y_test)
     svr_metrics, y_pred_svr = evaluate_model(svr_model, X_test, y_test)
     xgb_metrics, y_pred_xgb = evaluate_model(xgb_model, X_test, y_test)
 
-    # --- Print comparison table ---
     print("\n" + "=" * 52)
     print(f"  {'Model':<16} {'RMSE':>8} {'MAE':>8} {'R²':>8}")
     print("-" * 52)
@@ -152,7 +199,6 @@ def compare_models(X_train, X_test, y_train, y_test, use_search: bool = True):
     print(f"  {'XGBoost':<16} {xgb_metrics['RMSE']:>8.4f} {xgb_metrics['MAE']:>8.4f} {xgb_metrics['R2']:>8.4f}")
     print("=" * 52)
 
-    # --- Select best by R² ---
     candidates = [
         ("RandomForest", rf_model,  rf_metrics,  y_pred_rf),
         ("SVR",          svr_model, svr_metrics, y_pred_svr),
@@ -192,13 +238,12 @@ def load_model(path: str = MODEL_PATH):
 
 # ── 7. Master pipeline ────────────────────────────────────────────────────────
 
-def run_forecasting_pipeline(X, y, use_search: bool = True):
+def run_forecasting_pipeline(X_train, X_test, y_train, y_test,
+                             use_search: bool = True):
     """
-    Full pipeline: split -> train all models -> compare -> save best -> plot.
-    Returns (best_model, best_metrics, y_test, best_y_pred, X_test,
-             all_metrics, all_preds).
+    Train all models on pre-split data (split done in preprocessing).
+    CV always uses TimeSeriesSplit to respect temporal ordering.
     """
-    X_train, X_test, y_train, y_test = split_data(X, y)
     best_model, best_metrics, y_test, best_y_pred, X_test, all_metrics, all_preds = \
         compare_models(X_train, X_test, y_train, y_test, use_search=use_search)
     save_model(best_model)
@@ -213,8 +258,9 @@ if __name__ == "__main__":
     from src.preprocessing import preprocess
     import os as _os
     _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    X, y, scaler, df = preprocess(_os.path.join(_root, "dataset", "DUQ_hourly.csv"))
+    X_train, X_test, y_train, y_test, scaler, train_df, test_df = \
+        preprocess(_os.path.join(_root, "dataset", "DUQ_hourly.csv"))
     best_model, best_metrics, y_test, best_y_pred, X_test, all_metrics, all_preds = \
-        run_forecasting_pipeline(X, y, use_search=False)
+        run_forecasting_pipeline(X_train, X_test, y_train, y_test, use_search=False)
     print("\nBest model metrics:", best_metrics)
     print("All metrics:", all_metrics)
