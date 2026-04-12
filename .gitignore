@@ -1,5 +1,39 @@
+# ───────── Python ─────────
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# ───────── Virtual Environment ─────────
 .venv/
+env/
+venv/
+
+# ───────── System Files ─────────
+.DS_Store
+Thumbs.db
+
+# ───────── Jupyter ─────────
+.ipynb_checkpoints/
+
+# ───────── Reports / Docs ─────────
 PROJECT_REPORT.*
 *.docx
+running doc.pdf
+viva_questions.md
+
+# ───────── Temporary / Debug Files ─────────
+*.txt
+out.txt
+ok.txt
+s.txt
+snip.txt
+v.txt
+
+# ───────── Large ML Artifacts ─────────
+*.npz
+*.pt
+
+# ───────── Optional (uncomment if needed) ─────────
+# dataset/*.csv
+# models/*.pkl
