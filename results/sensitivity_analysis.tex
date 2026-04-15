@@ -1,0 +1,25 @@
+\begin{table}[htbp]
+\centering
+\caption{GOA Weight Sensitivity Analysis: Peak, Cost, and Variance Reduction across Weight Combinations (Pareto-optimal marked \textbf{P})}
+\label{tab:sensitivity}
+\begin{tabular}{ccccrrrl}
+\hline
+$w_\text{peak}$ & $w_\text{cost}$ & $w_\text{var}$ & $w_\text{par}$ & \textbf{Peak Red.\%} & \textbf{Cost Red.\%} & \textbf{Var Red.\%} & \textbf{Pareto} \\
+\hline
+0.5 & 0.1 & 0.3 & 0.10 & 21.03 & 12.49 & 52.06 & \textbf{P} \\
+0.3 & 0.1 & 0.3 & 0.30 & 20.86 & 12.47 & 51.84 &  \\
+0.1 & 0.1 & 0.3 & 0.50 & 20.85 & 12.32 & 51.10 &  \\
+0.5 & 0.3 & 0.1 & 0.10 & 20.37 & 12.44 & 48.11 &  \\
+0.7 & 0.1 & 0.1 & 0.10 & 20.33 & 12.35 & 47.76 &  \\
+0.1 & 0.5 & 0.1 & 0.30 & 19.95 & 12.53 & 49.81 & \textbf{P} \\
+0.1 & 0.3 & 0.3 & 0.30 & 19.72 & 12.62 & 51.85 & \textbf{P} \\
+0.3 & 0.3 & 0.3 & 0.10 & 19.68 & 12.64 & 51.89 & \textbf{P} \\
+0.1 & 0.1 & 0.5 & 0.30 & 19.54 & 12.24 & 51.93 &  \\
+0.3 & 0.1 & 0.5 & 0.10 & 19.43 & 12.33 & 52.13 & \textbf{P} \\
+0.1 & 0.7 & 0.1 & 0.10 & 19.40 & 13.17 & 50.64 & \textbf{P} \\
+0.1 & 0.5 & 0.3 & 0.10 & 19.12 & 13.14 & 52.08 & \textbf{P} \\
+0.1 & 0.3 & 0.5 & 0.10 & 18.00 & 12.76 & 52.53 & \textbf{P} \\
+\hline
+\multicolumn{8}{l}{\footnotesize w\_par = 1 - w\_peak - w\_cost - w\_var; grid values $\in \{0.1, 0.3, 0.5, 0.7\}$; GOA: 20 agents, 50 iterations, seed=42.} \\
+\end{tabular}
+\end{table}

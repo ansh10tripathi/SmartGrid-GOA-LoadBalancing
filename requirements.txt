@@ -12,3 +12,4 @@ notebook
 ipykernel
 torch
 shap
+mealpy

@@ -41,7 +41,7 @@ _ROOT       = os.path.dirname(_SRC_DIR)
 RESULTS_DIR = os.path.join(_ROOT, "results")
 
 # Maximum test-set rows explained per model.
-_TREE_EXPLAIN_ROWS = 200
+_TREE_EXPLAIN_ROWS = 50
 
 # SVR KernelExplainer settings
 _SVR_BG_CLUSTERS  = 30

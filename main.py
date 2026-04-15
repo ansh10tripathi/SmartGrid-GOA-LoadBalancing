@@ -17,7 +17,7 @@ from src.forecasting_model  import run_forecasting_pipeline, compare_models, sav
 from src.lstm_model         import run_lstm_pipeline, WINDOW_SIZE
 from src.quantile_model     import run_quantile_pipeline
 from src.explainability     import run_explainability_pipeline
-from src.goa_optimization   import grasshopper_optimization
+from src.goa_optimization   import grasshopper_optimization, plot_constraint_comparison
 from src.evaluation         import compare_before_after, compute_metrics
 from src.leakage_audit      import run_audit
 import pandas as pd
@@ -162,6 +162,13 @@ def main():
     save_model(model)
     evaluate_model_performance(y_test, y_pred)
 
+    # ── Save individual model artefacts for paper_comparison / evaluation ────
+    # evaluation._load_sklearn_models() looks for these specific filenames.
+    joblib.dump(rf_pipeline,  os.path.join(_root, "models", "random_forest_model.pkl"))
+    joblib.dump(svr_pipeline, os.path.join(_root, "models", "svr_model.pkl"))
+    joblib.dump(xgb_pipeline, os.path.join(_root, "models", "xgboost_model.pkl"))
+    print("  Individual model artefacts saved -> models/")
+
     # ── Step 2.1: Model comparison bar chart (R²) ────────────────────────────
     print("\nStep 2.1: Model Comparison Bar Chart...")
 
@@ -209,32 +216,8 @@ def main():
     plt.tight_layout()
     _save(os.path.abspath(os.path.join(RESULTS_DIR, "lstm_vs_ml_comparison.png")))
 
-    model_names = list(all_metrics.keys())
-    r2_values   = [all_metrics[m]["R2"]   for m in model_names]
-    rmse_values = [all_metrics[m]["RMSE"] for m in model_names]
-
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-    colors = ["steelblue", "tomato", "seagreen", "darkorange"]
-
-    bars = axes[0].bar(model_names, r2_values, color=colors, alpha=0.85, width=0.4)
-    for bar in bars:
-        axes[0].text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.005,
-                     f"{bar.get_height():.4f}", ha="center", va="bottom", fontsize=9)
-    axes[0].set_title("Model Comparison — R²")
-    axes[0].set_ylabel("R²")
-    axes[0].grid(axis="y", alpha=0.3)
-
-    bars = axes[1].bar(model_names, rmse_values, color=colors, alpha=0.85, width=0.4)
-    for bar in bars:
-        axes[1].text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.005,
-                     f"{bar.get_height():.2f}", ha="center", va="bottom", fontsize=9)
-    axes[1].set_title("Model Comparison — RMSE")
-    axes[1].set_ylabel("RMSE (kWh)")
-    axes[1].grid(axis="y", alpha=0.3)
-
-    fig.suptitle("ML Model Comparison", fontsize=12)
-    plt.tight_layout()
-    _save(os.path.abspath(os.path.join(RESULTS_DIR, "model_comparison.png")))
+    # model_comparison.png — built after ALL models (RF/SVR/XGB/LSTM/QR) are ready
+    # deferred to after quantile step below
 
     # ── Step 2.2: Feature Importance (RF only) ───────────────────────────────
     from src.preprocessing import FEATURE_COLS
@@ -264,6 +247,35 @@ def main():
         "R2":   q_metrics["R2"],
     }
 
+    # ── Step 2.1 (deferred): model_comparison.png — all 5 models ─────────────
+    print("\nStep 2.1: Model Comparison Bar Chart (all models)...")
+    _BAR_COLORS = ["steelblue", "tomato", "seagreen", "darkorange", "mediumpurple"]
+    model_names = list(all_metrics.keys())          # RF, SVR, XGB, LSTM, QR-Median
+    r2_values   = [all_metrics[m]["R2"]   for m in model_names]
+    rmse_values = [all_metrics[m]["RMSE"] for m in model_names]
+    bar_colors  = _BAR_COLORS[:len(model_names)]
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4))
+    bars = axes[0].bar(model_names, r2_values, color=bar_colors, alpha=0.85, width=0.5)
+    for bar in bars:
+        axes[0].text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.005,
+                     f"{bar.get_height():.4f}", ha="center", va="bottom", fontsize=8)
+    axes[0].set_title("Model Comparison — R²")
+    axes[0].set_ylabel("R²")
+    axes[0].grid(axis="y", alpha=0.3)
+
+    bars = axes[1].bar(model_names, rmse_values, color=bar_colors, alpha=0.85, width=0.5)
+    for bar in bars:
+        axes[1].text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.005,
+                     f"{bar.get_height():.4f}", ha="center", va="bottom", fontsize=8)
+    axes[1].set_title("Model Comparison — RMSE (MW)")
+    axes[1].set_ylabel("RMSE (MW)")
+    axes[1].grid(axis="y", alpha=0.3)
+
+    fig.suptitle("ML Model Comparison (all models)", fontsize=12)
+    plt.tight_layout()
+    _save(os.path.abspath(os.path.join(RESULTS_DIR, "model_comparison.png")))
+
     # ── Step 2.7: SHAP explainability ────────────────────────────────────────
     print("\nStep 2.7: Computing SHAP values (RF + XGBoost + SVR)...")
     run_explainability_pipeline(
@@ -271,6 +283,11 @@ def main():
         X_train.values, X_test.values, y_test.values,
         FEATURE_COLS,
     )
+
+    # ── Step 2.8: Paper comparison table (uses saved model artefacts) ─────────
+    print("\nStep 2.8: Building publication comparison table...")
+    from src.paper_comparison import run_paper_comparison
+    run_paper_comparison()
 
     # ── Step 3: Leakage audit ───────────────────────────────────────────────
     print("\nStep 3: Running Leakage Audit...")
@@ -289,6 +306,16 @@ def main():
     # ── Step 4: Evaluate before vs after ─────────────────────────────────────
     print("\nStep 4: Evaluating Results...")
     compare_before_after(y_pred, optimized_load, price_test)
+
+    # ── Step 4b: Constraint comparison plot ──────────────────────────────────
+    print("\nStep 4b: Plotting constraint comparison...")
+    plot_constraint_comparison(
+        y_pred, optimized_load,
+        goa_result["max_ramp_rate"],
+        goa_result["grid_max"],
+        goa_result["load_min"],
+        save_path=os.path.join(RESULTS_DIR, "constraint_comparison.png"),
+    )
 
     # ── Step 5: Visualisations ────────────────────────────────────────────────
 
@@ -369,6 +396,146 @@ def main():
     _save(os.path.abspath(os.path.join(RESULTS_DIR, "performance_comparison.png")))
 
     print("\nProject Execution Completed! Results saved to results/")
+
+    # ── Step 5e: Algorithm comparison CSV + PNG (GOA KPIs table) ─────────────
+    print("\nStep 5e: Saving algorithm comparison table...")
+    m_before = compute_metrics(y_pred,         price_test, "Before GOA")
+    m_after  = compute_metrics(optimized_load, price_test, "After GOA")
+    algo_df  = pd.DataFrame([
+        {
+            "Metric":     "Peak Load (MW)",
+            "Before GOA": round(m_before["peak_load"],  2),
+            "After GOA":  round(m_after["peak_load"],   2),
+            "Change (%)": round((m_after["peak_load"]  - m_before["peak_load"])  / m_before["peak_load"]  * 100, 2),
+        },
+        {
+            "Metric":     "Total Cost ($)",
+            "Before GOA": round(m_before["total_cost"], 2),
+            "After GOA":  round(m_after["total_cost"],  2),
+            "Change (%)": round((m_after["total_cost"] - m_before["total_cost"]) / m_before["total_cost"] * 100, 2),
+        },
+        {
+            "Metric":     "PAR",
+            "Before GOA": round(m_before["PAR"],        4),
+            "After GOA":  round(m_after["PAR"],         4),
+            "Change (%)": round((m_after["PAR"]         - m_before["PAR"])         / m_before["PAR"]         * 100, 2),
+        },
+        {
+            "Metric":     "Variance (MW²)",
+            "Before GOA": round(m_before["variance"],   2),
+            "After GOA":  round(m_after["variance"],    2),
+            "Change (%)": round((m_after["variance"]    - m_before["variance"])    / m_before["variance"]    * 100, 2),
+        },
+    ])
+    algo_csv = os.path.join(RESULTS_DIR, "algorithm_comparison.csv")
+    algo_df.to_csv(algo_csv, index=False)
+    print(f"  algorithm_comparison.csv saved -> {algo_csv}")
+
+    # Grouped bar chart: Before vs After for each KPI
+    kpi_labels = algo_df["Metric"].tolist()
+    before_vals = algo_df["Before GOA"].tolist()
+    after_vals  = algo_df["After GOA"].tolist()
+    x = np.arange(len(kpi_labels))
+    w = 0.35
+    fig, ax = plt.subplots(figsize=(10, 4))
+    b1 = ax.bar(x - w/2, before_vals, w, label="Before GOA", color="tomato",   alpha=0.85)
+    b2 = ax.bar(x + w/2, after_vals,  w, label="After GOA",  color="seagreen", alpha=0.85)
+    for bar in list(b1) + list(b2):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.01,
+                f"{bar.get_height():.2f}", ha="center", va="bottom", fontsize=7)
+    ax.set_xticks(x)
+    ax.set_xticklabels(kpi_labels, fontsize=9)
+    ax.set_title("Algorithm Comparison: Before vs After GOA", fontsize=11)
+    ax.legend(fontsize=9)
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    _save(os.path.abspath(os.path.join(RESULTS_DIR, "algorithm_comparison.png")))
+
+    # ── Save unified model_results.json (single source of truth for app.py) ──
+    import json
+    from src.evaluation import _mape
+
+    def _safe_float(v):
+        """Convert numpy scalars to plain Python float."""
+        try:
+            return float(v)
+        except Exception:
+            return None
+
+    # GOA KPIs
+    goa_kpis = {
+        "peak_before":    _safe_float(y_pred.max()),
+        "peak_after":     _safe_float(optimized_load.max()),
+        "peak_pct":       round((_safe_float(optimized_load.max()) - _safe_float(y_pred.max())) / _safe_float(y_pred.max()) * 100, 2),
+        "cost_before":    _safe_float(np.sum(y_pred * price_test)),
+        "cost_after":     _safe_float(np.sum(optimized_load * price_test)),
+        "cost_pct":       round((_safe_float(np.sum(optimized_load * price_test)) - _safe_float(np.sum(y_pred * price_test))) / _safe_float(np.sum(y_pred * price_test)) * 100, 2),
+        "par_before":     _safe_float(float(y_pred.max()) / float(y_pred.mean())),
+        "par_after":      _safe_float(float(optimized_load.max()) / float(optimized_load.mean())),
+        "var_before":     _safe_float(np.var(y_pred)),
+        "var_after":      _safe_float(np.var(optimized_load)),
+        "best_model":     best_name,
+        "best_fitness":   _safe_float(goa_result["best_fitness"]),
+        "max_ramp_rate":  _safe_float(goa_result["max_ramp_rate"]),
+        "grid_max":       _safe_float(goa_result["grid_max"]),
+        "load_min":       _safe_float(goa_result["load_min"]),
+        "ramp_violations":   goa_result["constraints"]["ramp_violations"],
+        "cap_violations":    goa_result["constraints"]["cap_violations"],
+        "floor_violations":  goa_result["constraints"]["floor_violations"],
+        "feasible":          goa_result["constraints"]["feasible"],
+    }
+
+    # ML metrics — normalise key names to RMSE/MAE/R2/MAPE everywhere
+    def _norm(m: dict) -> dict:
+        """Ensure every metrics dict has RMSE, MAE, R2, MAPE keys."""
+        out = {}
+        out["RMSE"] = _safe_float(m.get("RMSE") or m.get("RMSE (MW)"))
+        out["MAE"]  = _safe_float(m.get("MAE")  or m.get("MAE (MW)"))
+        out["R2"]   = _safe_float(m.get("R2")   or m.get("R²"))
+        out["MAPE"] = _safe_float(m.get("MAPE") or m.get("MAPE (%)"))
+        return out
+
+    y_test_arr = np.asarray(y_test)
+
+    model_results = {
+        "RandomForest": {
+            **_norm(rf_metrics),
+            "MAPE": round(_mape(y_test_arr, np.asarray(y_pred_rf)), 4),
+        },
+        "SVR": {
+            **_norm(svr_metrics),
+            "MAPE": round(_mape(y_test_arr, np.asarray(y_pred_svr)), 4),
+        },
+        "XGBoost": {
+            **_norm(xgb_metrics),
+            "MAPE": round(_mape(y_test_arr, np.asarray(y_pred_xgb)), 4),
+        },
+        "LSTM": {
+            **_norm(lstm_metrics),
+            "MAPE": round(_mape(np.asarray(lstm_true), np.asarray(lstm_pred)), 4),
+        },
+        "QuantileGBR": {
+            "RMSE":     _safe_float(q_metrics.get("RMSE")),
+            "MAE":      _safe_float(q_metrics.get("MAE")),
+            "R2":       _safe_float(q_metrics.get("R2")),
+            "MAPE":     None,
+            "coverage": _safe_float(q_metrics.get("coverage_80pct")),
+            "width_MW": _safe_float(q_metrics.get("mean_interval_MW")),
+        },
+        "_meta": {
+            "best_model":   best_name,
+            "train_rows":   int(len(X_train)),
+            "test_rows":    int(len(X_test)),
+            "n_features":   int(X_train.shape[1]),
+            "split_date":   str(train_df["datetime"].max()),
+            "goa":          goa_kpis,
+        },
+    }
+
+    results_json = os.path.join(RESULTS_DIR, "model_results.json")
+    with open(results_json, "w", encoding="utf-8") as f:
+        json.dump(model_results, f, indent=2)
+    print(f"  model_results.json saved -> {results_json}")
 
 
 if __name__ == "__main__":

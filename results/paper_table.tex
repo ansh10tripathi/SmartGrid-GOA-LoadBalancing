@@ -1,19 +1,19 @@
 \begin{table}[htbp]
   \centering
-  \caption{Performance comparison of forecasting models on the DUQ hourly load dataset (test set, 2015--2018). Best result per metric shown in bold.}
+  \caption{Performance comparison of forecasting models on the DUQ hourly load dataset (test set, 2005--2018). Best result per metric shown in bold.}
   \label{tab:model_comparison}
   \begin{tabular}{lrrrr}
     \toprule
     \textbf{Model} & \textbf{RMSE (MW)$\downarrow$} & \textbf{MAE (MW)$\downarrow$} & \textbf{$R^2$$\uparrow$} & \textbf{MAPE (\%)$\downarrow$} \\
     \midrule
-    Random Forest & \textbf{22.45} & \textbf{16.92} & \textbf{0.9941} & \textbf{1.08} \\
-    SVR & 44.30 & 29.09 & 0.9772 & 1.85 \\
-    XGBoost & 22.81 & 17.09 & 0.9940 & 1.09 \\
+    Random Forest & 27.90 & 21.45 & 0.9909 & 1.37 \\
+    XGBoost & \textbf{21.41} & \textbf{15.99} & \textbf{0.9947} & \textbf{1.02} \\
+    SVR & 23.31 & 17.72 & 0.9937 & 1.12 \\
     \bottomrule
   \end{tabular}
   \begin{tablenotes}
     \small
-    \item Bold values indicate the best result per metric.
+    \item Bold = best result per metric.
     \item $\downarrow$ lower is better; $\uparrow$ higher is better.
     \item Dataset: DUQ hourly load (2005--2018), 80/20 chronological split.
   \end{tablenotes}

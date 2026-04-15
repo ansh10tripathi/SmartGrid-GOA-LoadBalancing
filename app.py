@@ -23,16 +23,42 @@ SCALER_PATH = "models/minmax_scaler.pkl"
 pipeline      = joblib.load(MODEL_PATH)  if os.path.exists(MODEL_PATH)  else None
 minmax_scaler = joblib.load(SCALER_PATH) if os.path.exists(SCALER_PATH) else None
 
-# ── Single source of truth for best model ────────────────────────────────────
-# Loaded once at startup; every section reads from this.
+# ── Single source of truth: load model_results.json once at startup ──────────
+import json as _json
+_RESULTS_JSON = "results/model_results.json"
+_model_results = None
+if os.path.exists(_RESULTS_JSON):
+    with open(_RESULTS_JSON, encoding="utf-8") as _f:
+        _model_results = _json.load(_f)
+
+# ── paper_table.csv for styled table display ──────────────────────────────────
 _PAPER_CSV = "results/paper_table.csv"
 if os.path.exists(_PAPER_CSV):
     _perf_df       = pd.read_csv(_PAPER_CSV, index_col=0)
     _best_by_r2    = _perf_df["R²"].idxmax()
     _best_by_rmse  = _perf_df["RMSE (MW)"].idxmin()
     _best_by_mae   = _perf_df["MAE (MW)"].idxmin()
-    _best_model    = _best_by_r2          # primary criterion used for GOA / saved model
+    _best_model    = _best_by_r2
     _best_row      = _perf_df.loc[_best_model]
+elif _model_results is not None:
+    # Build _perf_df from model_results.json so Overview always works
+    _meta = _model_results.get("_meta", {})
+    _rows = {}
+    for name, m in _model_results.items():
+        if name.startswith("_"):
+            continue
+        _rows[name] = {
+            "RMSE (MW)": m.get("RMSE"),
+            "MAE (MW)":  m.get("MAE"),
+            "R²":        m.get("R2"),
+            "MAPE (%)": m.get("MAPE"),
+        }
+    _perf_df = pd.DataFrame(_rows).T.dropna(subset=["R²"])
+    _best_model   = _perf_df["R²"].idxmax()
+    _best_by_r2   = _best_model
+    _best_by_rmse = _perf_df["RMSE (MW)"].idxmin()
+    _best_by_mae  = _perf_df["MAE (MW)"].idxmin()
+    _best_row     = _perf_df.loc[_best_model]
 else:
     _perf_df = _best_row = None
     _best_model = _best_by_r2 = _best_by_rmse = _best_by_mae = "XGBoost"
@@ -82,6 +108,9 @@ section = st.sidebar.radio(
         "🎯 Uncertainty Bounds",
         "🔍 SHAP Explainability",
         "📄 Paper Table",
+        "🔬 Statistical Analysis",
+        "⚖️ Sensitivity Analysis",
+        "🏹 Pareto Front",
         "📂 Dataset",
         "📊 All Graphs"
     ]
@@ -159,8 +188,41 @@ elif section == "📈 Model Analysis":
 # ─────────────────────────────────────────────
 elif section == "⚙️ Optimization":
 
+    # ── GOA KPI metrics from model_results.json ───────────────────────────
+    if _model_results is not None:
+        goa = _model_results.get("_meta", {}).get("goa", {})
+        if goa:
+            st.subheader("⚡ GOA Optimization Results")
+            c1, c2, c3, c4 = st.columns(4)
+            peak_pct = goa.get("peak_pct", 0)
+            cost_pct = goa.get("cost_pct", 0)
+            par_before = goa.get("par_before", 0)
+            par_after  = goa.get("par_after",  0)
+            var_before = goa.get("var_before", 0)
+            var_after  = goa.get("var_after",  0)
+            par_pct  = (par_after  - par_before)  / par_before  * 100 if par_before  else 0
+            var_pct  = (var_after  - var_before)  / var_before  * 100 if var_before  else 0
+            c1.metric("Peak Reduction",  f"{abs(peak_pct):.1f}%",
+                      delta=f"{peak_pct:+.1f}%", delta_color="inverse")
+            c2.metric("Cost Savings",    f"{abs(cost_pct):.1f}%",
+                      delta=f"{cost_pct:+.1f}%", delta_color="inverse")
+            c3.metric("PAR Reduction",   f"{abs(par_pct):.1f}%",
+                      delta=f"{par_pct:+.1f}%",  delta_color="inverse")
+            c4.metric("Variance Reduction", f"{abs(var_pct):.1f}%",
+                      delta=f"{var_pct:+.1f}%",  delta_color="inverse")
+            st.caption(
+                f"Best model used for GOA: **{goa.get('best_model', 'N/A')}** · "
+                f"Best fitness: {goa.get('best_fitness', 0):.4f}"
+            )
+            st.markdown("---")
+
     if os.path.exists("results/goa_comparison.png"):
         st.image("results/goa_comparison.png", width="stretch")
+
+    if os.path.exists("results/constraint_comparison.png"):
+        st.image("results/constraint_comparison.png",
+                 caption="Physical Constraints: Ramp Rate, Ceiling, Floor",
+                 use_container_width=True)
 
     if os.path.exists("results/goa_convergence.png"):
         st.image("results/goa_convergence.png", width="stretch")
@@ -226,11 +288,13 @@ elif section == "🔮 Live Prediction":
     ]], columns=FEATURE_COLS)
 
     if pipeline is not None and minmax_scaler is not None:
-        input_df = pd.DataFrame(
+        # pipeline already contains an internal StandardScaler.
+        # minmax_scaler normalises the raw MW lag/rolling features so they
+        # are on the same [0,1] scale the pipeline was trained on.
+        input_scaled = pd.DataFrame(
             minmax_scaler.transform(raw_input), columns=FEATURE_COLS
         )
-        # Pipeline.predict() runs StandardScaler → model internally
-        prediction = pipeline.predict(input_df)[0]
+        prediction = pipeline.predict(input_scaled)[0]
         st.success(f"⚡ Predicted Load: {prediction:.2f} MW")
     elif minmax_scaler is None:
         st.warning("MinMax scaler not found. Re-run `python main.py` to generate it.")
@@ -533,6 +597,178 @@ elif section == "📄 Paper Table":
                     file_name="paper_table.tex",
                     mime="text/plain",
                 )
+
+# ─────────────────────────────────────────────
+# STATISTICAL ANALYSIS
+# ─────────────────────────────────────────────
+elif section == "🔬 Statistical Analysis":
+
+    st.subheader("🔬 Statistical Significance Analysis")
+    st.caption(
+        "GOA vs PSO, GA, DE over 30 independent runs (seeds 1-30). "
+        "Wilcoxon signed-rank test. Run `python statistical_analysis.py` to generate."
+    )
+
+    _stat_csv = "results/statistical_comparison.csv"
+    _stat_tex = "results/statistical_comparison.tex"
+
+    if not os.path.exists(_stat_csv):
+        st.warning("No results found. Run `python statistical_analysis.py` first.")
+    else:
+        _stat_df = pd.read_csv(_stat_csv)
+
+        # KPI cards — GOA row
+        goa_row = _stat_df[_stat_df["Algorithm"].str.contains("GOA")].iloc[0]
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("GOA Mean Fitness",  f"{goa_row['Mean']:.6f}")
+        c2.metric("GOA Std",           f"{goa_row['Std']:.6f}")
+        c3.metric("GOA Best",          f"{goa_row['Best']:.6f}")
+        c4.metric("GOA Worst",         f"{goa_row['Worst']:.6f}")
+
+        st.markdown("---")
+
+        # Colour Sig column
+        def _sig_color(val):
+            if val == "**":  return "background-color:#1a6b3c; color:white; font-weight:bold"
+            if val == "*":   return "background-color:#7b3f00; color:white"
+            return ""
+
+        st.dataframe(
+            _stat_df.style.applymap(_sig_color, subset=["Sig"]),
+            hide_index=True, use_container_width=True,
+        )
+        st.caption("** p<0.01   * p<0.05   ns = not significant")
+
+        st.markdown("---")
+
+        # Bar chart: mean fitness per algorithm
+        import matplotlib.pyplot as _plt
+        numeric_df = _stat_df[pd.to_numeric(_stat_df["Mean"], errors="coerce").notna()].copy()
+        numeric_df["Mean"] = numeric_df["Mean"].astype(float)
+        fig, ax = _plt.subplots(figsize=(8, 4))
+        colors = ["gold" if "GOA" in a else "steelblue" for a in numeric_df["Algorithm"]]
+        bars = ax.bar(numeric_df["Algorithm"], numeric_df["Mean"],
+                      color=colors, alpha=0.85, width=0.5)
+        for bar in bars:
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height()*1.002,
+                    f"{bar.get_height():.5f}", ha="center", va="bottom", fontsize=8)
+        ax.set_ylabel("Mean Best Fitness (lower = better)")
+        ax.set_title("Algorithm Comparison: Mean Fitness over 30 Runs")
+        ax.grid(axis="y", alpha=0.3)
+        _plt.tight_layout()
+        st.pyplot(fig)
+        _plt.close(fig)
+
+        if os.path.exists(_stat_tex):
+            with open(_stat_tex, encoding="utf-8") as _f:
+                tex_src = _f.read()
+            with st.expander("📋 LaTeX Table"):
+                st.code(tex_src, language="latex")
+                st.download_button("⬇️ Download .tex", tex_src,
+                                   "statistical_comparison.tex", "text/plain")
+
+# ─────────────────────────────────────────────
+# SENSITIVITY ANALYSIS
+# ─────────────────────────────────────────────
+elif section == "⚖️ Sensitivity Analysis":
+
+    st.subheader("⚖️ Weight Sensitivity Analysis")
+    st.caption(
+        "Grid search over w_peak, w_cost, w_var in {0.1, 0.3, 0.5, 0.7}. "
+        "Run `python sensitivity_analysis.py` to generate."
+    )
+
+    _sens_csv = "results/sensitivity_results.csv"
+    _sens_tex = "results/sensitivity_analysis.tex"
+
+    if not os.path.exists(_sens_csv):
+        st.warning("No results found. Run `python sensitivity_analysis.py` first.")
+    else:
+        _sens_df = pd.read_csv(_sens_csv)
+        pareto_df = _sens_df[_sens_df["pareto"] == True]
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Combinations",    len(_sens_df))
+        c2.metric("Pareto-Optimal",         len(pareto_df))
+        c3.metric("Best Peak Reduction",
+                  f"{_sens_df['peak_red_%'].max():.2f}%")
+
+        st.markdown("---")
+        st.markdown("**Pareto-optimal weight combinations**")
+        st.dataframe(pareto_df[["w_peak","w_cost","w_var","w_par",
+                                 "peak_red_%","cost_red_%","var_red_%"]]
+                     .reset_index(drop=True),
+                     hide_index=True, use_container_width=True)
+
+        st.markdown("---")
+        for fname, caption in [
+            ("sensitivity_heatmap_peak_cost.png", "Peak Reduction Heatmap (w_peak vs w_cost)"),
+            ("sensitivity_heatmap_cost_var.png",  "Cost Reduction Heatmap"),
+            ("sensitivity_heatmap_peak_var.png",  "Variance Reduction Heatmap"),
+            ("sensitivity_pareto.png",             "3-D Pareto Scatter"),
+        ]:
+            path = f"results/{fname}"
+            if os.path.exists(path):
+                st.image(path, caption=caption, use_container_width=True)
+
+        if os.path.exists(_sens_tex):
+            with open(_sens_tex, encoding="utf-8") as _f:
+                tex_src = _f.read()
+            with st.expander("📋 LaTeX Table"):
+                st.code(tex_src, language="latex")
+                st.download_button("⬇️ Download .tex", tex_src,
+                                   "sensitivity_analysis.tex", "text/plain")
+
+# ─────────────────────────────────────────────
+# PARETO FRONT
+# ─────────────────────────────────────────────
+elif section == "🏹 Pareto Front":
+
+    st.subheader("🏹 Multi-Objective Pareto Front")
+    st.caption(
+        "200 GOA runs with Dirichlet-sampled weights. "
+        "Objectives: Peak Reduction, Cost Reduction, Variance Reduction. "
+        "Run `python pareto_analysis.py` to generate."
+    )
+
+    _par_csv = "results/pareto_front.csv"
+    _par_tex = "results/pareto_front.tex"
+    _par_png = "results/pareto_front.png"
+
+    if not os.path.exists(_par_csv):
+        st.warning("No results found. Run `python pareto_analysis.py` first.")
+    else:
+        _par_df   = pd.read_csv(_par_csv)
+        _par_opt  = _par_df[_par_df["pareto"] == True]
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Runs",          len(_par_df))
+        c2.metric("Pareto-Optimal",       len(_par_opt))
+        c3.metric("Best Peak Red.",       f"{_par_df['peak_red_%'].max():.2f}%")
+        c4.metric("Best Cost Red.",       f"{_par_df['cost_red_%'].max():.2f}%")
+
+        st.markdown("---")
+
+        if os.path.exists(_par_png):
+            st.image(_par_png, caption="Pareto Front: Peak vs Cost vs Variance",
+                     use_container_width=True)
+
+        st.markdown("**Pareto-optimal solutions**")
+        st.dataframe(
+            _par_opt[["w_peak","w_cost","w_var",
+                       "peak_red_%","cost_red_%","var_red_%"]]
+            .sort_values("peak_red_%", ascending=False)
+            .reset_index(drop=True),
+            hide_index=True, use_container_width=True,
+        )
+
+        if os.path.exists(_par_tex):
+            with open(_par_tex, encoding="utf-8") as _f:
+                tex_src = _f.read()
+            with st.expander("📋 LaTeX Table"):
+                st.code(tex_src, language="latex")
+                st.download_button("⬇️ Download .tex", tex_src,
+                                   "pareto_front.tex", "text/plain")
 
 # ─────────────────────────────────────────────
 # DATASET

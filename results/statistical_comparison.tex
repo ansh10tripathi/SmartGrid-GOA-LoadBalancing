@@ -1,0 +1,16 @@
+\begin{table}[htbp]
+\centering
+\caption{Statistical Comparison of GOA vs Benchmark Algorithms over 30 Independent Runs}
+\label{tab:statistical_comparison}
+\begin{tabular}{lccccccl}
+\hline
+\textbf{Algorithm} & \textbf{Mean} & \textbf{Std} & \textbf{Best} & \textbf{Worst} & \textbf{W-stat} & \textbf{$p$-value} & \textbf{Sig.} \\
+\hline
+GOA (proposed) & 0.837288 & 0.004217 & 0.828696 & 0.847031 & - & - & - \\
+PSO & 0.832345 & 0.005812 & 0.826577 & 0.855235 & 40.000000 & 0.000016 & ** \\
+GA & 0.896909 & 0.011136 & 0.874010 & 0.923058 & 0.000000 & 0.000000 & ** \\
+DE & 0.827030 & 0.001659 & 0.825804 & 0.835445 & 3.000000 & 0.000000 & ** \\
+\hline
+\multicolumn{8}{l}{\footnotesize * $p < 0.05$; ** $p < 0.01$; ns = not significant (Wilcoxon signed-rank test, $n=30$)} \\
+\end{tabular}
+\end{table}
