@@ -36,4 +36,6 @@ v.txt
 
 # ───────── Optional (uncomment if needed) ─────────
 # dataset/*.csv
-models/*.pkl
+# Ignore models
+models/
+*.pkl
