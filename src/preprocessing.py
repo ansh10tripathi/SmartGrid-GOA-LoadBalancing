@@ -311,13 +311,14 @@ def add_rolling_mean(train_df: pd.DataFrame,
     Strategy
     --------
     1. Compute rolling_mean_24 on train using only train load values.
-    2. Seed the test window with the last 23 train load values so the
-       first test rows have a proper 24-point window without using any
-       future test load.
-    3. Compute rolling_mean_24 on the seeded test series.
-
-    This is equivalent to what would happen in a real deployment where
-    you only ever have access to past observations.
+    2. Seed the test window with the last 24 train load values so the
+       first test row's window is mean(train[-24:]) — zero test-target
+       contribution at the boundary.
+    3. Each subsequent test row's window slides forward using only the
+       test load values that precede it (past observations), which is
+       correct for deployment but does use test-set load values for
+       rows after the first. This matches real deployment conditions
+       where past actuals are always available.
     """
     # Train: straightforward rolling on train load
     train_df = train_df.copy()
@@ -325,18 +326,23 @@ def add_rolling_mean(train_df: pd.DataFrame,
         train_df[TARGET_COL].rolling(window=24, min_periods=1).mean()
     )
 
-    # Test: seed with last 23 train values so boundary rows are correct
-    seed        = train_df[TARGET_COL].iloc[-23:].values          # 23 past points
+    # Test: seed with last 24 train values so every test row's window
+    # contains only past (training) observations — no test target leakage.
+    # rolling(24) on [train[-24:] | test_load] produces the correct mean
+    # for each test row using only the 24 values strictly before it.
+    seed        = train_df[TARGET_COL].iloc[-24:].values          # 24 past points
     test_load   = test_df[TARGET_COL].values
-    seeded      = np.concatenate([seed, test_load])               # len = 23 + len(test)
+    seeded      = np.concatenate([seed, test_load])               # len = 24 + len(test)
     rolling_all = (
         pd.Series(seeded)
-        .rolling(window=24, min_periods=1)
+        .rolling(window=24, min_periods=24)
         .mean()
         .values
     )
+    # rolling_all[23]  = mean(seed[0:24])       = mean(train[-24:])  → first test row
+    # rolling_all[24]  = mean(seed[1:24]+t0)    → second test row, etc.
     test_df = test_df.copy()
-    test_df["rolling_mean_24"] = rolling_all[23:]                 # drop the seed rows
+    test_df["rolling_mean_24"] = rolling_all[23:23 + len(test_df)]
 
     print(f"[add_rolling_mean] Train rolling_mean_24: "
           f"min={train_df['rolling_mean_24'].min():.1f}  "
@@ -366,18 +372,14 @@ def verify_no_leakage(train_df: pd.DataFrame, test_df: pd.DataFrame) -> None:
         )
 
     # ── rolling_mean_24 boundary ──────────────────────────────────────────────
-    # The first test row's rolling_mean_24 is computed from:
-    #   seed = train[-23:]  +  test[0]  (24 values total)
-    # NOT from train[-24:] alone, because add_rolling_mean seeds with
-    # 23 train values then prepends test[0] to complete the window.
-    seed_values   = train_df[TARGET_COL].iloc[-23:].values
-    first_test    = test_df[TARGET_COL].iloc[0]
-    expected_roll = np.mean(np.append(seed_values, first_test))
+    # The first test row's rolling_mean_24 must equal mean(train[-24:]) —
+    # 24 pure training values with zero test-set contribution.
+    expected_roll = train_df[TARGET_COL].iloc[-24:].mean()
     actual_roll   = test_df["rolling_mean_24"].iloc[0]
     delta_roll    = abs(expected_roll - actual_roll)
     assert delta_roll < 1e-6, (
         f"Leakage in rolling_mean_24: first test row={actual_roll:.4f}, "
-        f"expected={expected_roll:.4f} (Δ={delta_roll:.2e})"
+        f"expected mean(train[-24:])={expected_roll:.4f} (Δ={delta_roll:.2e})"
     )
 
     # ── Datetime non-overlap ──────────────────────────────────────────────────
@@ -396,25 +398,41 @@ def normalize_features(train_df: pd.DataFrame, test_df: pd.DataFrame):
     """
     Fit MinMaxScaler on train features only, then transform both splits.
     Fitting on the full dataset would leak test-set min/max into training.
+
+    A separate target scaler (target_scaler) is fit on y_train only and
+    returned alongside the feature scaler so that models requiring scaled
+    targets (e.g. LSTM) can use it for inverse-transforming predictions
+    without accessing test-set target statistics.
     """
-    scaler = MinMaxScaler()
+    scaler        = MinMaxScaler()
+    target_scaler = MinMaxScaler()
 
     X_train = train_df[FEATURE_COLS].copy()
     X_test  = test_df[FEATURE_COLS].copy()
-    y_train = train_df[TARGET_COL].copy()
-    y_test  = test_df[TARGET_COL].copy()
+    y_train = train_df[TARGET_COL].values.reshape(-1, 1)
+    y_test  = test_df[TARGET_COL].values.reshape(-1, 1)
 
     X_train_scaled = scaler.fit_transform(X_train)          # fit on train only
     X_test_scaled  = scaler.transform(X_test)               # transform only
 
+    y_train_scaled = target_scaler.fit_transform(y_train)   # fit on train only
+    y_test_scaled  = target_scaler.transform(y_test)        # transform only
+
     X_train_df = pd.DataFrame(X_train_scaled, columns=FEATURE_COLS, index=train_df.index)
     X_test_df  = pd.DataFrame(X_test_scaled,  columns=FEATURE_COLS, index=test_df.index)
+
+    # Return flat Series for y (consistent with downstream model API)
+    y_train_out = pd.Series(y_train_scaled.ravel(), index=train_df.index, name=TARGET_COL)
+    y_test_out  = pd.Series(y_test_scaled.ravel(),  index=test_df.index,  name=TARGET_COL)
 
     print(f"[normalize_features] Scaler fit on {len(X_train):,} train rows only.")
     print(f"  Feature ranges after scaling — "
           f"train: [{X_train_scaled.min():.3f}, {X_train_scaled.max():.3f}]  "
           f"test:  [{X_test_scaled.min():.3f}, {X_test_scaled.max():.3f}]")
-    return X_train_df, X_test_df, y_train, y_test, scaler
+    print(f"  Target ranges after scaling  — "
+          f"train: [{y_train_scaled.min():.3f}, {y_train_scaled.max():.3f}]  "
+          f"test:  [{y_test_scaled.min():.3f}, {y_test_scaled.max():.3f}]")
+    return X_train_df, X_test_df, y_train_out, y_test_out, scaler, target_scaler
 
 
 # ── 9. Master pipeline ────────────────────────────────────────────────────────
@@ -426,17 +444,10 @@ def preprocess(filepath: str):
 
     Returns
     -------
-    X_train, X_test, y_train, y_test, scaler, train_df, test_df
+    X_train, X_test, y_train, y_test, scaler, target_scaler, train_df, test_df
     """
     df = load_data(filepath)
     df = add_tou_features(df)           # 3-tier TOU price + tier index, no leakage
-
-    # NaN fill before feature engineering using full-dataset median
-    # (only load column matters here; no target leakage since we fill
-    #  the raw load series, not a derived feature)
-    before = df.isnull().sum().sum()
-    df[TARGET_COL] = df[TARGET_COL].fillna(df[TARGET_COL].median())
-    print(f"[preprocess] NaNs filled: {before} → {df.isnull().sum().sum()}")
 
     df = extract_time_features(df)      # datetime-only, no leakage
     df = add_exogenous_features(df)     # holiday flag + synthetic temp, no leakage
@@ -444,6 +455,14 @@ def preprocess(filepath: str):
 
     # ── SPLIT before any cross-row statistics ──────────────────────────────
     train_df, test_df = split_by_time(df)
+
+    # ── NaN fill using train median only (post-split to prevent leakage) ──
+    before = train_df.isnull().sum().sum() + test_df.isnull().sum().sum()
+    train_load_median = train_df[TARGET_COL].median()
+    train_df[TARGET_COL] = train_df[TARGET_COL].fillna(train_load_median)
+    test_df[TARGET_COL]  = test_df[TARGET_COL].fillna(train_load_median)
+    after = train_df.isnull().sum().sum() + test_df.isnull().sum().sum()
+    print(f"[preprocess] NaNs filled (train median={train_load_median:.2f}): {before} → {after}")
 
     # ── Rolling mean computed post-split ──────────────────────────────────
     train_df, test_df = add_rolling_mean(train_df, test_df)
@@ -461,16 +480,16 @@ def preprocess(filepath: str):
     )
 
     # ── Normalize (scaler fit on train only) ──────────────────────────────
-    X_train, X_test, y_train, y_test, scaler = normalize_features(train_df, test_df)
+    X_train, X_test, y_train, y_test, scaler, target_scaler = normalize_features(train_df, test_df)
 
-    return X_train, X_test, y_train, y_test, scaler, train_df, test_df
+    return X_train, X_test, y_train, y_test, scaler, target_scaler, train_df, test_df
 
 
 # ── Quick test ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import os as _os
     _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    X_train, X_test, y_train, y_test, scaler, train_df, test_df = \
+    X_train, X_test, y_train, y_test, scaler, target_scaler, train_df, test_df = \
         preprocess(_os.path.join(_root, "dataset", "DUQ_hourly.csv"))
     print(f"\nX_train : {X_train.shape}   y_train : {y_train.shape}")
     print(f"X_test  : {X_test.shape}    y_test  : {y_test.shape}")

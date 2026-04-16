@@ -575,7 +575,7 @@ if __name__ == "__main__":
     from src.preprocessing import preprocess
 
     print("Loading data...")
-    X_train, X_test, y_train, y_test, scaler, train_df, test_df = \
+    X_train, X_test, y_train, y_test, scaler, target_scaler, train_df, test_df = \
         preprocess(os.path.join(_ROOT, "dataset", "DUQ_hourly.csv"))
 
     # Layer 1 — single model performance demo

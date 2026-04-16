@@ -44,7 +44,7 @@ def run_paper_comparison(
     from src.evaluation    import build_model_comparison_table
 
     print("\n[paper_comparison] Loading and preprocessing data...")
-    _, X_test, _, y_test, _, _, _ = \
+    _, X_test, _, y_test, _, _, _, _ = \
         preprocess(os.path.join(_ROOT, "dataset", "DUQ_hourly.csv"))
 
     return build_model_comparison_table(

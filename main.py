@@ -39,7 +39,7 @@ def main():
     # ── Step 1: Preprocess ───────────────────────────────────────────────────
     print("\nStep 1: Preprocessing...")
     _root = os.path.dirname(os.path.abspath(__file__))
-    X_train, X_test, y_train, y_test, scaler, train_df, test_df = \
+    X_train, X_test, y_train, y_test, scaler, target_scaler, train_df, test_df = \
         preprocess(os.path.join(_root, "dataset", "DUQ_hourly.csv"))
     joblib.dump(scaler, os.path.join(_root, "models", "minmax_scaler.pkl"))
     print("  MinMaxScaler saved -> models/minmax_scaler.pkl")

@@ -404,7 +404,7 @@ if __name__ == "__main__":
     import joblib
     from src.preprocessing import preprocess
 
-    X_train, X_test, y_train, y_test, scaler, train_df, test_df = \
+    X_train, X_test, y_train, y_test, scaler, target_scaler, train_df, test_df = \
         preprocess(DATASET_PATH)
 
     MODEL_PATH = os.path.join(_ROOT, "models", "load_forecast_model.pkl")

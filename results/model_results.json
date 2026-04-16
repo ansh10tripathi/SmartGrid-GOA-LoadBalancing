@@ -1,35 +1,35 @@
 {
   "RandomForest": {
-    "RMSE": 27.8992,
-    "MAE": 21.4482,
-    "R2": 0.9909,
-    "MAPE": 1.3707
+    "RMSE": 0.0138,
+    "MAE": 0.0105,
+    "R2": 0.9908,
+    "MAPE": 5.0536
   },
   "SVR": {
-    "RMSE": 27.2187,
-    "MAE": 20.3919,
-    "R2": 0.9914,
-    "MAPE": 1.2966
+    "RMSE": 0.0345,
+    "MAE": 0.028,
+    "R2": 0.9422,
+    "MAPE": 17.2292
   },
   "XGBoost": {
-    "RMSE": 21.4143,
-    "MAE": 15.9894,
-    "R2": 0.9947,
-    "MAPE": 1.0168
+    "RMSE": 0.0105,
+    "MAE": 0.0079,
+    "R2": 0.9946,
+    "MAPE": 3.7815
   },
   "LSTM": {
-    "RMSE": 37.2828,
-    "MAE": 27.451,
-    "R2": 0.9838,
-    "MAPE": 1.7255
+    "RMSE": 0.0176,
+    "MAE": 0.013,
+    "R2": 0.9851,
+    "MAPE": 6.1176
   },
   "QuantileGBR": {
-    "RMSE": 22.973,
-    "MAE": 17.2794,
-    "R2": 0.9939,
+    "RMSE": 0.0113,
+    "MAE": 0.0085,
+    "R2": 0.9938,
     "MAPE": null,
-    "coverage": 0.8045,
-    "width_MW": 60.1079
+    "coverage": 0.8041,
+    "width_MW": 0.0295
   },
   "_meta": {
     "best_model": "XGBoost",
@@ -38,22 +38,22 @@
     "n_features": 22,
     "split_date": "2015-11-16 03:00:00",
     "goa": {
-      "peak_before": 2819.23583984375,
-      "peak_after": 2474.2399013338745,
-      "peak_pct": -12.24,
-      "cost_before": 5456722.358164063,
-      "cost_after": 5042431.400218161,
-      "cost_pct": -7.59,
-      "par_before": 1.7896621334853597,
-      "par_after": 1.6960329943220063,
-      "var_before": 85290.875,
-      "var_after": 63365.57390582479,
+      "peak_before": 0.885614812374115,
+      "peak_after": 0.7701218670495132,
+      "peak_pct": -13.04,
+      "cost_before": 1005.3234151910247,
+      "cost_after": 925.0368637733359,
+      "cost_pct": -7.99,
+      "par_before": 3.2183561402602447,
+      "par_after": 3.0360984139929923,
+      "var_before": 0.02049397863447666,
+      "var_after": 0.01644063634843229,
       "best_model": "XGBoost",
-      "best_fitness": 0.8865666804812423,
-      "max_ramp_rate": 236.29339713723044,
-      "grid_max": 3101.1594238281255,
-      "load_min": 638.287939453125,
-      "ramp_violations": 172,
+      "best_fitness": 0.9630215019939194,
+      "max_ramp_rate": 0.04127641982795267,
+      "grid_max": 0.9741762936115266,
+      "load_min": 0.013103814795613289,
+      "ramp_violations": 4722,
       "cap_violations": 0,
       "floor_violations": 0,
       "feasible": false

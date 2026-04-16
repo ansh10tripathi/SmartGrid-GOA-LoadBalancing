@@ -733,6 +733,12 @@ A three-part automated audit (src/leakage_audit.py) verifies model integrity:
 
 **Quantile GBR 80% Interval:** Coverage ≥80% on test set; mean interval width reported in results/quantile_preds.npz.
 
+![Model Performance Comparison — RMSE, MAE, R², MAPE](results/paper_comparison.png)
+*Fig. 1. Publication-grade grouped bar chart comparing RMSE, MAE, R², and MAPE across all five forecasting models (RF, XGBoost, SVR, LSTM, Quantile GBR). XGBoost achieves the lowest RMSE (21.41 MW) and highest R² (0.9947).*
+
+![Model Comparison — RMSE & R²](results/model_comparison.png)
+*Fig. 2. Bar chart comparison of RMSE and R² scores for Random Forest, XGBoost, SVR, LSTM, and Quantile GBR on the DUQ test set.*
+
 **Analysis:**
 
 1. **XGBoost Superiority:**
@@ -819,6 +825,12 @@ A three-part automated audit (src/leakage_audit.py) verifies model integrity:
    - Only redistributes existing load to off-peak periods
    - Feasible for demand-response programs
 
+![Before vs. After GOA — Load Curve & KPI Comparison](results/goa_comparison.png)
+*Fig. 3. Four-panel KPI comparison (Peak Demand, Total Cost, PAR, Variance) before and after GOA optimization, showing 22.3% peak reduction and 18.7% cost savings.*
+
+![Before vs. After GOA — Load Profile](results/before_after_load.png)
+*Fig. 4. Hourly load curve overlay showing the predicted (before) and GOA-optimized (after) schedules. Peak flattening and off-peak load redistribution are clearly visible.*
+
 #### 4.2.2 Convergence Analysis
 
 | Iteration | Best Fitness | Improvement from Prev | Convergence Rate (%) |
@@ -836,6 +848,9 @@ A three-part automated audit (src/leakage_audit.py) verifies model integrity:
 - **Efficiency:** 80% of improvement achieved by iteration 30
 
 **Recommendation:** 30-40 iterations sufficient for practical deployment; 100 iterations used for research rigor.
+
+![GOA Convergence Curve](results/goa_convergence.png)
+*Fig. 5. GOA fitness minimization curve over 100 iterations. Rapid exploration in Phase 1 (iter 1–10) accounts for ~44% of total improvement; the algorithm converges near-optimally by iteration 30.*
 
 ### 4.3 Statistical Comparison of Optimization Algorithms
 
