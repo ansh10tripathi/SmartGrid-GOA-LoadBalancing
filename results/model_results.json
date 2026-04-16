@@ -6,10 +6,10 @@
     "MAPE": 1.3707
   },
   "SVR": {
-    "RMSE": 23.3139,
-    "MAE": 17.7157,
-    "R2": 0.9937,
-    "MAPE": 1.1218
+    "RMSE": 27.2187,
+    "MAE": 20.3919,
+    "R2": 0.9914,
+    "MAPE": 1.2966
   },
   "XGBoost": {
     "RMSE": 21.4143,
@@ -18,10 +18,10 @@
     "MAPE": 1.0168
   },
   "LSTM": {
-    "RMSE": 35.8495,
-    "MAE": 26.5409,
-    "R2": 0.9851,
-    "MAPE": 1.6779
+    "RMSE": 37.2828,
+    "MAE": 27.451,
+    "R2": 0.9838,
+    "MAPE": 1.7255
   },
   "QuantileGBR": {
     "RMSE": 22.973,
@@ -39,17 +39,24 @@
     "split_date": "2015-11-16 03:00:00",
     "goa": {
       "peak_before": 2819.23583984375,
-      "peak_after": 2472.805463834739,
-      "peak_pct": -12.29,
+      "peak_after": 2474.2399013338745,
+      "peak_pct": -12.24,
       "cost_before": 5456722.358164063,
-      "cost_after": 5042432.487499153,
+      "cost_after": 5042431.400218161,
       "cost_pct": -7.59,
       "par_before": 1.7896621334853597,
-      "par_after": 1.6950491168490576,
+      "par_after": 1.6960329943220063,
       "var_before": 85290.875,
-      "var_after": 63365.19400324281,
+      "var_after": 63365.57390582479,
       "best_model": "XGBoost",
-      "best_fitness": 0.886233933319606
+      "best_fitness": 0.8865666804812423,
+      "max_ramp_rate": 236.29339713723044,
+      "grid_max": 3101.1594238281255,
+      "load_min": 638.287939453125,
+      "ramp_violations": 172,
+      "cap_violations": 0,
+      "floor_violations": 0,
+      "feasible": false
     }
   }
 }

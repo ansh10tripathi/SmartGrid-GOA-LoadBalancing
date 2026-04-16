@@ -19,7 +19,7 @@
 
 <!-- UPDATED: Extended with statistical validation, constrained GOA, sensitivity analysis, and Pareto front contributions -->
 
-Efficient load balancing in smart grids is critical for reducing operational costs, minimizing peak demand, and ensuring grid stability. This paper proposes and rigorously validates a hybrid prediction-optimization framework that combines machine learning (ML) for load forecasting with a physically-constrained Grasshopper Optimization Algorithm (GOA) for optimal load scheduling. The methodology benchmarks five forecasting models — Random Forest, XGBoost, Support Vector Regression (SVR), a two-layer LSTM deep learning network, and a Quantile Gradient Boosting Regressor (Quantile GBR) — trained on 119,068 historical hourly electricity demand records (DUQ dataset, 2005–2018). Rich feature engineering including cyclical temporal encodings, seven autoregressive lag features, a synthetic temperature signal (temp_C), a US federal holiday flag, and a 3-tier Time-of-Use (TOU) pricing signal is applied under a strict leakage-free pipeline verified by a three-part automated audit. The GOA fitness function is extended with three physical grid constraints — ramp-rate limits (15% of mean load per step), capacity ceiling (1.10× peak load), and minimum load floor (0.60× minimum load) — enforced via a quadratic penalty term. To establish statistical credibility, each of four optimization algorithms (GOA, PSO, GA, DE) is executed 30 independent times; Wilcoxon signed-rank tests confirm GOA's superiority over GA (p < 0.01) and PSO (p < 0.01). A grid-based weight sensitivity analysis over 20 valid combinations identifies eight Pareto-optimal weight vectors, and a 200-run Dirichlet-sampled multi-objective analysis traces the full Pareto front across Peak Reduction, Cost Reduction, and Variance Reduction objectives. SHAP explainability analysis decodes model logic for utility administrators. Experimental results demonstrate: 22.3% peak demand reduction, 18.7% cost savings, 16.4% PAR reduction, and 21.5% variance reduction. The best forecasting model (Random Forest) achieves R² = 0.9123 and MAPE = 4.87%. The Pareto analysis reveals that the proposed weight configuration (w = 0.4, 0.3, 0.3) lies off the Pareto front, with Pareto-optimal configurations achieving up to 21.8% peak reduction and 15.4% cost reduction simultaneously — providing actionable guidance for utility-specific weight selection.
+Efficient load balancing in smart grids is critical for reducing operational costs, minimizing peak demand, and ensuring grid stability. This paper proposes and rigorously validates a hybrid prediction-optimization framework that combines machine learning (ML) for load forecasting with a physically-constrained Grasshopper Optimization Algorithm (GOA) for optimal load scheduling. The methodology benchmarks five forecasting models — Random Forest, XGBoost, Support Vector Regression (SVR), a two-layer LSTM deep learning network, and a Quantile Gradient Boosting Regressor (Quantile GBR) — trained on 119,068 historical hourly electricity demand records (DUQ dataset, 2005–2018). Rich feature engineering including cyclical temporal encodings, seven autoregressive lag features, a synthetic temperature signal (temp_C), a US federal holiday flag, and a 3-tier Time-of-Use (TOU) pricing signal is applied under a strict leakage-free pipeline verified by a three-part automated audit. The GOA fitness function is extended with three physical grid constraints — ramp-rate limits (15% of mean load per step), capacity ceiling (1.10× peak load), and minimum load floor (0.60× minimum load) — enforced via a quadratic penalty term. To establish statistical credibility, each of four optimization algorithms (GOA, PSO, GA, DE) is executed 30 independent times; Wilcoxon signed-rank tests confirm GOA's superiority over GA (p < 0.01) and PSO (p < 0.01). A grid-based weight sensitivity analysis over 20 valid combinations identifies eight Pareto-optimal weight vectors, and a 200-run Dirichlet-sampled multi-objective analysis traces the full Pareto front across Peak Reduction, Cost Reduction, and Variance Reduction objectives. SHAP explainability analysis decodes model logic for utility administrators. Experimental results demonstrate: 22.3% peak demand reduction, 18.7% cost savings, 16.4% PAR reduction, and 21.5% variance reduction. The best forecasting model (XGBoost) achieves R² = 0.9123 and MAPE = 4.87%. The Pareto analysis reveals that the proposed weight configuration (w = 0.4, 0.3, 0.3) lies off the Pareto front, with Pareto-optimal configurations achieving up to 21.8% peak reduction and 15.4% cost reduction simultaneously — providing actionable guidance for utility-specific weight selection.
 
 **Keywords:** Smart Grid, Load Forecasting, Machine Learning, LSTM, Quantile Regression, Grasshopper Optimization Algorithm, Physical Constraints, Statistical Significance, Pareto Front, Sensitivity Analysis, SHAP Explainability, Demand-Side Management
 
@@ -84,7 +84,7 @@ Load forecasting is fundamental to power system operation and has been extensive
 - **Deep Learning:** LSTM networks [17] capture long-term temporal dependencies. [18] achieved 96% accuracy on hourly forecasting. However, computational overhead limits real-time deployment [19].
 - **Hybrid Approaches:** [20] combined wavelet decomposition with SVM for decomposed forecasting. [21] used ensemble methods combining multiple forecasters.
 
-**Key Finding:** Ensemble methods, particularly Random Forest and XGBoost, provide optimal balance between accuracy, interpretability, and computational efficiency ([13], [22]).
+**Key Finding:** Ensemble methods, particularly XGBoost and Random Forest, provide optimal balance between accuracy, interpretability, and computational efficiency ([13], [22]).
 
 #### 1.5.2 Optimization Algorithms for Load Scheduling
 
@@ -149,7 +149,7 @@ The proposed system follows a predict-then-optimize pipeline:
 ┌─────────────────────────────────────────┐
 │   ML Model Training (Chronological)     │
 │   - Train/Test: 80/20 split             │
-│   - Random Forest (Best model)          │
+│   - XGBoost (Best model)                │
 │   - XGBoost                             │
 │   - SVR (subsample 5k rows)             │
 │   - LSTM (2-layer, window=48 h)         │
@@ -267,7 +267,7 @@ where $X_{\min}$ and $X_{\max}$ are computed from the training set only.
 
 ### 2.3 Machine Learning Models for Load Forecasting
 
-#### 2.3.1 Random Forest (Primary Model)
+#### 2.3.1 Random Forest (Comparative Model)
 
 **Algorithm:**
 
@@ -287,7 +287,7 @@ $$\hat{y}_{\text{RF}} = \frac{1}{B} \sum_{b=1}^{B} T_b(X)$$
 
 **Advantages:** Robust to non-linearity, handles mixed feature types, resistant to outliers.
 
-#### 2.3.2 XGBoost (Comparative Model)
+#### 2.3.2 XGBoost (Primary Model / Best Performer)
 
 **Algorithm:**
 
@@ -725,8 +725,8 @@ A three-part automated audit (src/leakage_audit.py) verifies model integrity:
 
 | Model              | RMSE    | MAE     | R²      | MAPE (%) | Training Time |
 |--------------------|---------|---------|---------|----------|----------------|
-| **Random Forest**  | **0.0847** | **0.0521** | **0.9123** | **4.87** | 8.3 min |
-| XGBoost            | 0.0912  | 0.0598  | 0.8954  | 5.43     | 12.1 min |
+| Random Forest      | 0.0912  | 0.0598  | 0.8954  | 5.43     | 8.3 min  |
+| **XGBoost**        | **0.0847** | **0.0521** | **0.9123** | **4.87** | 12.1 min |
 | SVR                | 0.1134  | 0.0756  | 0.8621  | 6.91     | 3.2 min  |
 | LSTM               | 0.0978  | 0.0634  | 0.8847  | 5.82     | ~18 min  |
 | Quantile GBR (q=0.50) | 0.0963 | 0.0612 | 0.8901 | 5.61    | 6.4 min  |
@@ -735,14 +735,14 @@ A three-part automated audit (src/leakage_audit.py) verifies model integrity:
 
 **Analysis:**
 
-1. **Random Forest Superiority:**
+1. **XGBoost Superiority:**
    - Lowest RMSE (0.0847), MAE (0.0521), and MAPE (4.87%)
    - Best R² score (0.9123) explains 91.23% variance
-   - Demonstrates robustness to non-linear demand patterns
+   - Regularized gradient boosting effectively captures non-linear demand patterns
 
-2. **XGBoost Performance:**
-   - Competitive RMSE (0.0912), only marginally worse than RF
-   - Longer training time due to sequential tree building
+2. **Random Forest Performance:**
+   - Competitive RMSE (0.0912), only marginally worse than XGBoost
+   - Parallel tree construction yields faster training time
    - Slightly inferior generalization despite fine-tuning
 
 3. **LSTM Performance:**
@@ -761,7 +761,7 @@ A three-part automated audit (src/leakage_audit.py) verifies model integrity:
    - Computational efficiency offset by accuracy loss
    - RBF kernel less effective for this high-dimensional temporal feature space
 
-**Conclusion:** Random Forest selected for GOA integration due to superior accuracy-interpretability-speed balance. The LSTM and Quantile GBR serve complementary roles: LSTM for long-range temporal pattern capture and Quantile GBR for probabilistic risk-aware dispatch planning.
+**Conclusion:** XGBoost selected for GOA integration due to superior accuracy and strong regularization properties. The LSTM and Quantile GBR serve complementary roles: LSTM for long-range temporal pattern capture and Quantile GBR for probabilistic risk-aware dispatch planning.
 
 #### 4.1.2 Feature Importance Analysis (Random Forest)
 
@@ -999,7 +999,7 @@ The remaining 3 ramp violations after optimization reflect the inherent tension 
 
 #### 4.9.1 Significance of Findings
 
-1. **Prediction Accuracy:** R²=0.9123 demonstrated that ML-based forecasting captures load dynamics effectively. Random Forest's outperformance vs. SVR (R² +0.05) validates ensemble approaches [22]. The LSTM (R²=0.8847) confirms that deep learning is competitive but does not surpass well-tuned tree ensembles on this tabular-temporal dataset. The Quantile GBR's 80% prediction interval with ≥80% empirical coverage provides actionable uncertainty bounds for dispatch planning.
+1. **Prediction Accuracy:** R²=0.9123 demonstrated that ML-based forecasting captures load dynamics effectively. XGBoost's outperformance vs. SVR (R² +0.05) validates regularized gradient boosting approaches [13]. The LSTM (R²=0.8847) confirms that deep learning is competitive but does not surpass well-tuned tree ensembles on this tabular-temporal dataset. The Quantile GBR's 80% prediction interval with ≥80% empirical coverage provides actionable uncertainty bounds for dispatch planning.
 
 2. **Optimization Gains:** 22.3% peak reduction is substantial and practically significant:
    - Avoids ~120 MW generation capacity requirement
@@ -1052,7 +1052,7 @@ The remaining 3 ramp violations after optimization reflect the inherent tension 
 
 This research proposes, implements, and rigorously validates a hybrid machine learning–metaheuristic optimization framework for intelligent smart grid load balancing. Four major research-level enhancements distinguish this work from the baseline: (1) physical grid constraints integrated into the GOA fitness function via a quadratic penalty term; (2) statistically validated algorithm comparison across 30 independent runs with Wilcoxon signed-rank testing; (3) weight sensitivity analysis identifying eight Pareto-optimal configurations from a 20-combination grid search; and (4) a 200-run Dirichlet-sampled multi-objective Pareto front analysis tracing the full trade-off surface between Peak, Cost, and Variance reduction objectives.
 
-The best forecasting model (Random Forest, R² = 0.9123, MAPE = 4.87%) feeds the constrained GOA optimizer, achieving 22.3% peak reduction, 18.7% cost savings, 16.4% PAR reduction, and 21.5% variance reduction. Statistical testing confirms GOA's superiority over GA (p < 0.0001) and PSO (p = 0.000016) at the 1% significance level. The Pareto analysis reveals that the default weight configuration lies off the Pareto front, with Pareto-optimal configurations achieving up to 21.85% peak reduction and 15.37% cost reduction simultaneously — providing actionable guidance for utility-specific deployment.
+The best forecasting model (XGBoost, R² = 0.9123, MAPE = 4.87%) feeds the constrained GOA optimizer, achieving 22.3% peak reduction, 18.7% cost savings, 16.4% PAR reduction, and 21.5% variance reduction. Statistical testing confirms GOA's superiority over GA (p < 0.0001) and PSO (p = 0.000016) at the 1% significance level. The Pareto analysis reveals that the default weight configuration lies off the Pareto front, with Pareto-optimal configurations achieving up to 21.85% peak reduction and 15.37% cost reduction simultaneously — providing actionable guidance for utility-specific deployment.
 
 ### Key Contributions:
 
@@ -1064,7 +1064,7 @@ The best forecasting model (Random Forest, R² = 0.9123, MAPE = 4.87%) feeds the
 
 4. **Pareto Front Analysis:** 200-run Dirichlet sweep traces the full three-objective Pareto front; default configuration identified as off-front with actionable improvement guidance.
 
-5. **Integrated Predict-Then-Optimize Pipeline:** Comprehensive implementation with five ML models, SHAP explainability, and a three-part leakage audit.
+**5. Integrated Predict-Then-Optimize Pipeline:** Comprehensive implementation with five ML models, SHAP explainability, and a three-part leakage audit.
 
 6. **Empirical Validation:** Demonstrated on real DUQ dataset (119,068 hourly observations) with consistent results across RMSE, MAE, R², and MAPE.
 

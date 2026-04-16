@@ -25,6 +25,7 @@ minmax_scaler = joblib.load(SCALER_PATH) if os.path.exists(SCALER_PATH) else Non
 
 # ── Single source of truth: load model_results.json once at startup ──────────
 import json as _json
+from io import BytesIO as _BytesIO
 _RESULTS_JSON = "results/model_results.json"
 _model_results = None
 if os.path.exists(_RESULTS_JSON):
@@ -41,8 +42,7 @@ if os.path.exists(_PAPER_CSV):
     _best_model    = _best_by_r2
     _best_row      = _perf_df.loc[_best_model]
 elif _model_results is not None:
-    # Build _perf_df from model_results.json so Overview always works
-    _meta = _model_results.get("_meta", {})
+    # Build _perf_df from model_results.json - all 5 models, None-safe
     _rows = {}
     for name, m in _model_results.items():
         if name.startswith("_"):
@@ -53,11 +53,14 @@ elif _model_results is not None:
             "R²":        m.get("R2"),
             "MAPE (%)": m.get("MAPE"),
         }
-    _perf_df = pd.DataFrame(_rows).T.dropna(subset=["R²"])
+    _perf_df = pd.DataFrame(_rows).T
+    for _c in _perf_df.columns:
+        _perf_df[_c] = pd.to_numeric(_perf_df[_c], errors="coerce")
+    _perf_df   = _perf_df.dropna(subset=["R²"])
     _best_model   = _perf_df["R²"].idxmax()
     _best_by_r2   = _best_model
-    _best_by_rmse = _perf_df["RMSE (MW)"].idxmin()
-    _best_by_mae  = _perf_df["MAE (MW)"].idxmin()
+    _best_by_rmse = _perf_df["RMSE (MW)"].dropna().idxmin()
+    _best_by_mae  = _perf_df["MAE (MW)"].dropna().idxmin()
     _best_row     = _perf_df.loc[_best_model]
 else:
     _perf_df = _best_row = None
@@ -66,13 +69,25 @@ else:
 
 def _winner_cards(df: pd.DataFrame) -> None:
     """Render three side-by-side winner cards — one per metric."""
+    # dropna per column so None (e.g. QuantileGBR MAPE) doesn't crash idxmax/idxmin
+    def _best_model_for(col, higher):
+        s = pd.to_numeric(df[col], errors="coerce").dropna()
+        if s.empty:
+            return "N/A", float("nan")
+        idx = s.idxmax() if higher else s.idxmin()
+        return idx, s[idx]
+
     winners = [
-        ("R²",       df["R²"].idxmax(),       df["R²"].max(),       "{:.4f}",  "#1a6b3c", "#d4f5e2", "↑ higher is better"),
-        ("RMSE (MW)", df["RMSE (MW)"].idxmin(), df["RMSE (MW)"].min(), "{:.2f} MW", "#7b3f00", "#fdebd0", "↓ lower is better"),
-        ("MAE (MW)",  df["MAE (MW)"].idxmin(),  df["MAE (MW)"].min(),  "{:.2f} MW", "#1a3a6b", "#d6eaf8", "↓ lower is better"),
+        ("R²",        True,  "{:.4f}",   "#1a6b3c", "#d4f5e2", "↑ higher is better"),
+        ("RMSE (MW)", False, "{:.4f} MW", "#7b3f00", "#fdebd0", "↓ lower is better"),
+        ("MAE (MW)",  False, "{:.4f} MW", "#1a3a6b", "#d6eaf8", "↓ lower is better"),
     ]
     cols = st.columns(3)
-    for col, (metric, model, value, fmt, text_col, bg_col, hint) in zip(cols, winners):
+    for col, (metric, higher, fmt, text_col, bg_col, hint) in zip(cols, winners):
+        if metric not in df.columns:
+            continue
+        model, value = _best_model_for(metric, higher)
+        val_str = fmt.format(value) if not (isinstance(value, float) and np.isnan(value)) else "N/A"
         col.markdown(
             f"""
             <div style="
@@ -85,7 +100,7 @@ def _winner_cards(df: pd.DataFrame) -> None:
                 <div style="font-size:22px; font-weight:700; color:{text_col};
                             margin-bottom:2px;">{model}</div>
                 <div style="font-size:15px; color:{text_col}; opacity:0.85;">
-                    {metric} = {fmt.format(value)}</div>
+                    {metric} = {val_str}</div>
                 <div style="font-size:10px; color:{text_col}; opacity:0.6;
                             margin-top:4px;">{hint}</div>
             </div>
@@ -152,16 +167,19 @@ if section == "📊 Overview":
 
         def _ov_highlight(col):
             higher = col.name == "R²"
-            best   = col.max() if higher else col.min()
+            numeric = pd.to_numeric(col, errors="coerce").dropna()
+            if numeric.empty:
+                return ["" for _ in col]
+            best = numeric.max() if higher else numeric.min()
             return [
                 "background-color: #b8860b; color: #ffffff; font-weight: bold"
-                if abs(v - best) < 1e-9 else ""
+                if (pd.notna(v) and abs(float(v) - best) < 1e-9) else ""
                 for v in col
             ]
 
         st.dataframe(
             _perf_df.style
-            .format(fmt)
+            .format(fmt, na_rep="—")
             .apply(_ov_highlight, axis=0),
             hide_index=False,
             width="stretch",
@@ -174,14 +192,103 @@ if section == "📊 Overview":
 # ─────────────────────────────────────────────
 elif section == "📈 Model Analysis":
 
-    if os.path.exists("results/feature_importance.png"):
-        st.image("results/feature_importance.png", width="stretch")
+    st.subheader("📈 Model Analysis")
 
-    if os.path.exists("results/actual_vs_predicted.png"):
-        st.image("results/actual_vs_predicted.png", width="stretch")
+    # ── KPI table from model_results.json ────────────────────────────────────
+    if _model_results is not None:
+        _rows = {}
+        for name, m in _model_results.items():
+            if name.startswith("_"):
+                continue
+            _rows[name] = {
+                "RMSE (MW)": m.get("RMSE"),
+                "MAE (MW)":  m.get("MAE"),
+                "R²":        m.get("R2"),
+                "MAPE (%)": m.get("MAPE"),
+            }
+        _ma_df = pd.DataFrame(_rows).T
 
-    if os.path.exists("results/model_comparison.png"):
-        st.image("results/model_comparison.png", width="stretch")
+        def _ma_highlight(col):
+            higher = col.name == "R²"
+            best   = col.max() if higher else col.min()
+            return [
+                "background-color:#1a6b3c; color:#fff; font-weight:bold"
+                if (v is not None and abs(float(v) - best) < 1e-9) else ""
+                for v in col
+            ]
+
+        fmt = {c: ("{:.4f}" if c == "R²" else "{:.4f}") for c in _ma_df.columns
+               if _ma_df[c].notna().any()}
+        st.dataframe(
+            _ma_df.style.format(fmt, na_rep="—").apply(_ma_highlight, axis=0),
+            width="stretch",
+        )
+        st.markdown("---")
+
+    # ── Model selector ────────────────────────────────────────────────────────
+    _model_tabs = st.tabs([
+        "🌲 Random Forest", "⚡ XGBoost", "📐 SVR", "🧠 LSTM", "📊 All Models"
+    ])
+
+    # ── Tab 0: Random Forest ──────────────────────────────────────────────────
+    with _model_tabs[0]:
+        if _model_results and "RandomForest" in _model_results:
+            m = _model_results["RandomForest"]
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("R²",       f"{m['R2']:.4f}")
+            c2.metric("RMSE (MW)", f"{m['RMSE']:.4f}")
+            c3.metric("MAE (MW)",  f"{m['MAE']:.4f}")
+            c4.metric("MAPE (%)",  f"{m['MAPE']:.4f}" if m.get('MAPE') else "—")
+        for img in ["feature_importance.png", "actual_vs_predicted.png",
+                    "shap_summary_randomforest.png", "shap_waterfall_randomforest.png"]:
+            if os.path.exists(f"results/{img}"):
+                st.image(f"results/{img}", caption=img, width="stretch")
+
+    # ── Tab 1: XGBoost ────────────────────────────────────────────────────────
+    with _model_tabs[1]:
+        if _model_results and "XGBoost" in _model_results:
+            m = _model_results["XGBoost"]
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("R²",       f"{m['R2']:.4f}")
+            c2.metric("RMSE (MW)", f"{m['RMSE']:.4f}")
+            c3.metric("MAE (MW)",  f"{m['MAE']:.4f}")
+            c4.metric("MAPE (%)",  f"{m['MAPE']:.4f}" if m.get('MAPE') else "—")
+        for img in ["shap_summary_xgboost.png", "shap_waterfall_xgboost.png"]:
+            if os.path.exists(f"results/{img}"):
+                st.image(f"results/{img}", caption=img, width="stretch")
+
+    # ── Tab 2: SVR ────────────────────────────────────────────────────────────
+    with _model_tabs[2]:
+        if _model_results and "SVR" in _model_results:
+            m = _model_results["SVR"]
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("R²",       f"{m['R2']:.4f}")
+            c2.metric("RMSE (MW)", f"{m['RMSE']:.4f}")
+            c3.metric("MAE (MW)",  f"{m['MAE']:.4f}")
+            c4.metric("MAPE (%)",  f"{m['MAPE']:.4f}" if m.get('MAPE') else "—")
+        for img in ["shap_summary_svr.png", "shap_waterfall_svr.png"]:
+            if os.path.exists(f"results/{img}"):
+                st.image(f"results/{img}", caption=img, width="stretch")
+
+    # ── Tab 3: LSTM ───────────────────────────────────────────────────────────
+    with _model_tabs[3]:
+        if _model_results and "LSTM" in _model_results:
+            m = _model_results["LSTM"]
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("R²",       f"{m['R2']:.4f}")
+            c2.metric("RMSE (MW)", f"{m['RMSE']:.4f}")
+            c3.metric("MAE (MW)",  f"{m['MAE']:.4f}")
+            c4.metric("MAPE (%)",  f"{m['MAPE']:.4f}" if m.get('MAPE') else "—")
+        for img in ["lstm_training_curve.png", "lstm_vs_ml_comparison.png"]:
+            if os.path.exists(f"results/{img}"):
+                st.image(f"results/{img}", caption=img, width="stretch")
+
+    # ── Tab 4: All Models ─────────────────────────────────────────────────────
+    with _model_tabs[4]:
+        for img in ["model_comparison.png", "paper_comparison.png",
+                    "quantile_ribbon.png"]:
+            if os.path.exists(f"results/{img}"):
+                st.image(f"results/{img}", caption=img, width="stretch")
 
 # ─────────────────────────────────────────────
 # OPTIMIZATION
@@ -222,7 +329,7 @@ elif section == "⚙️ Optimization":
     if os.path.exists("results/constraint_comparison.png"):
         st.image("results/constraint_comparison.png",
                  caption="Physical Constraints: Ramp Rate, Ceiling, Floor",
-                 use_container_width=True)
+                 width="stretch")
 
     if os.path.exists("results/goa_convergence.png"):
         st.image("results/goa_convergence.png", width="stretch")
@@ -377,7 +484,10 @@ elif section == "🎯 Uncertainty Bounds":
         ax.legend(fontsize=9)
         ax.grid(alpha=0.3)
         _plt.tight_layout()
-        st.pyplot(fig)
+        _buf = _BytesIO()
+        fig.savefig(_buf, format='png', dpi=120, bbox_inches='tight')
+        _buf.seek(0)
+        st.image(_buf)
         _plt.close(fig)
 
         # ── Coverage breakdown table ──────────────────────────────────────────
@@ -424,13 +534,18 @@ elif section == "🔍 SHAP Explainability":
         feature_names = list(data["feature_names"])
         peak_idx      = int(data["peak_idx"][0])
 
-        model_choice = st.selectbox(
-            "Select model",
-            ["RandomForest", "XGBoost", "SVR"],
-        )
+        # Only show models whose SHAP arrays are actually present in the .npz
+        _sv_map = {"RandomForest": "rf_sv", "XGBoost": "xgb_sv", "SVR": "svr_sv"}
+        _ev_map = {"RandomForest": "rf_ev", "XGBoost": "xgb_ev", "SVR": "svr_ev"}
+        _available = [m for m, k in _sv_map.items() if k in data]
+        if not _available:
+            st.warning("No SHAP arrays found in shap_values.npz. Re-run `python main.py`.")
+            st.stop()
 
-        sv_key = {"RandomForest": "rf_sv", "XGBoost": "xgb_sv", "SVR": "svr_sv"}[model_choice]
-        ev_key = {"RandomForest": "rf_ev", "XGBoost": "xgb_ev", "SVR": "svr_ev"}[model_choice]
+        model_choice = st.selectbox("Select model", _available)
+
+        sv_key = _sv_map[model_choice]
+        ev_key = _ev_map[model_choice]
         shap_vals      = data[sv_key]          # (n_samples, n_features)
         expected_value = float(data[ev_key][0])
         n_samples      = len(shap_vals)
@@ -456,7 +571,10 @@ elif section == "🔍 SHAP Explainability":
         ax.set_title(f"SHAP Feature Importance — {model_choice}  ({n_samples:,} samples)")
         ax.grid(axis="x", alpha=0.3)
         _plt.tight_layout()
-        st.pyplot(fig)
+        _buf = _BytesIO()
+        fig.savefig(_buf, format='png', dpi=120, bbox_inches='tight')
+        _buf.seek(0)
+        st.image(_buf)
         _plt.close(fig)
 
         st.markdown("---")
@@ -506,7 +624,10 @@ elif section == "🔍 SHAP Explainability":
         ax2.legend(fontsize=8)
         ax2.grid(axis="x", alpha=0.3)
         _plt.tight_layout()
-        st.pyplot(fig2)
+        _buf = _BytesIO()
+        fig2.savefig(_buf, format='png', dpi=120, bbox_inches='tight')
+        _buf.seek(0)
+        st.image(_buf)
         _plt.close(fig2)
 
         # ── Top-feature table ────────────────────────────────────────────────
@@ -536,67 +657,120 @@ elif section == "📄 Paper Table":
     _tex  = _os.path.join("results", "paper_table.tex")
     _png  = _os.path.join("results", "paper_comparison.png")
 
-    if not _os.path.exists(_csv):
-        st.warning(
-            "No comparison data found. "
-            "Run `python src/paper_comparison.py` first."
-        )
-    else:
-        import pandas as _pd
-
+    # ── Build full 5-model table from model_results.json (primary source) ──
+    # paper_table.csv only has RF/XGB/SVR; model_results.json has all 5.
+    import pandas as _pd
+    if _model_results is not None:
+        _pt_rows = {}
+        _display_names = {
+            "RandomForest": "Random Forest",
+            "SVR": "SVR",
+            "XGBoost": "XGBoost",
+            "LSTM": "LSTM",
+            "QuantileGBR": "Quantile GBR (q=0.50)",
+        }
+        for key, label in _display_names.items():
+            if key not in _model_results:
+                continue
+            m = _model_results[key]
+            _pt_rows[label] = {
+                "RMSE (MW)": m.get("RMSE"),
+                "MAE (MW)":  m.get("MAE"),
+                "R²":        m.get("R2"),
+                "MAPE (%)": m.get("MAPE"),
+            }
+        df = _pd.DataFrame(_pt_rows).T
+        # best model name in display-name space
+        _pt_best = _display_names.get(_best_model, _best_model)
+    elif _os.path.exists(_csv):
         df = _pd.read_csv(_csv, index_col=0)
+        _pt_best = _best_model
+    else:
+        st.warning("No comparison data found. Run `python main.py` first.")
+        st.stop()
 
-        # ── Direction flags — lower is better except R² ────────────────────────
-        higher_better = {"R²": True}
+    higher_better = {"R²": True}
 
-        def _highlight_best_row(row):
-            """Highlight the entire best-model row with high-contrast gold style."""
-            if row.name == _best_model:
-                return ["background-color: #b8860b; color: #ffffff; font-weight: bold"] * len(row)
-            return [""] * len(row)
+    def _highlight_best_row(row):
+        if row.name == _pt_best:
+            return ["background-color: #b8860b; color: #ffffff; font-weight: bold"] * len(row)
+        return [""] * len(row)
 
-        def _highlight_best_cell(col):
-            """Underline the best value in every metric column."""
-            hb   = higher_better.get(col.name, False)
-            best = col.max() if hb else col.min()
-            return [
-                "border-bottom: 2px solid #ffd700" if abs(v - best) < 1e-9 else ""
-                for v in col
-            ]
+    def _highlight_best_cell(col):
+        hb      = higher_better.get(col.name, False)
+        numeric = _pd.to_numeric(col, errors="coerce").dropna()
+        if numeric.empty:
+            return ["" for _ in col]
+        best = numeric.max() if hb else numeric.min()
+        return [
+            "border-bottom: 2px solid #ffd700"
+            if (_pd.notna(v) and abs(float(v) - best) < 1e-9) else ""
+            for v in col
+        ]
 
-        # Format: R² to 4 dp, others to 2 dp
-        fmt = {c: ("{:.4f}" if c == "R²" else "{:.2f}") for c in df.columns}
+    fmt = {c: ("{:.4f}" if c == "R²" else "{:.4f}") for c in df.columns}
+    styled = (
+        df.style
+        .apply(_highlight_best_row, axis=1)
+        .apply(_highlight_best_cell, axis=0)
+        .format(fmt, na_rep="—")
+    )
+    st.dataframe(styled, width="stretch")
 
-        styled = (
-            df.style
-            .apply(_highlight_best_row, axis=1)
-            .apply(_highlight_best_cell, axis=0)
-            .format(fmt)
-        )
-        st.dataframe(styled, width="stretch")
+    # ── Per-metric winner cards ──────────────────────────────────────────
+    st.markdown("##### 🏆 Best model per metric")
+    _winner_cards(df)
 
-        # ── Per-metric winner cards (same as Overview) ──────────────────────
-        st.markdown("##### 🏆 Best model per metric")
-        _winner_cards(df)
+    st.markdown("---")
 
-        st.markdown("---")
+    # ── Grouped bar chart ────────────────────────────────────────────────
+    import matplotlib.pyplot as _plt
+    _metrics_to_plot = [c for c in ["RMSE (MW)", "MAE (MW)", "R²", "MAPE (%)"] if c in df.columns]
+    _colors = ["#4C72B0", "#55A868", "#DD8452", "#C44E52", "#8172B2"]
+    _models = list(df.index)
+    _bar_colors = _colors[:len(_models)]
+    _fig, _axes = _plt.subplots(1, len(_metrics_to_plot),
+                                figsize=(4.5 * len(_metrics_to_plot), 5))
+    if len(_metrics_to_plot) == 1:
+        _axes = [_axes]
+    for _ax, _met in zip(_axes, _metrics_to_plot):
+        _vals = _pd.to_numeric(df[_met], errors="coerce").fillna(0).values
+        _hb   = higher_better.get(_met, False)
+        _best_i = int(np.argmax(_vals) if _hb else np.argmin(_vals))
+        _bars = _ax.bar(_models, _vals, color=_bar_colors, alpha=0.85, width=0.5)
+        for _i, (_b, _v) in enumerate(zip(_bars, _vals)):
+            _ax.text(_b.get_x() + _b.get_width()/2, _b.get_height()*1.005,
+                     f"{_v:.4f}", ha="center", va="bottom", fontsize=7,
+                     fontweight="bold" if _i == _best_i else "normal")
+        _bars[_best_i].set_edgecolor("goldenrod")
+        _bars[_best_i].set_linewidth(2)
+        _ax.set_title(_met, fontsize=9)
+        _ax.set_xticks(range(len(_models)))
+        _ax.set_xticklabels(_models, rotation=20, ha="right", fontsize=8)
+        _ax.grid(axis="y", alpha=0.3)
+    _fig.suptitle("All-Model Performance Comparison (★ = best per metric)",
+                  fontsize=11)
+    _plt.tight_layout()
+    _buf = _BytesIO()
+    _fig.savefig(_buf, format='png', dpi=120, bbox_inches='tight')
+    _buf.seek(0)
+    st.image(_buf)
+    _plt.close(_fig)
 
-        # ── Grouped bar chart ─────────────────────────────────────────────
-        if _os.path.exists(_png):
-            st.image(_png, width="stretch")
+    st.markdown("---")
 
-        # ── LaTeX source ─────────────────────────────────────────────────
-        if _os.path.exists(_tex):
-            with open(_tex, encoding="utf-8") as _f:
-                latex_src = _f.read()
-            with st.expander("📋 Copy LaTeX source"):
-                st.code(latex_src, language="latex")
-                st.download_button(
-                    label="⬇️ Download .tex",
-                    data=latex_src,
-                    file_name="paper_table.tex",
-                    mime="text/plain",
-                )
+    # ── LaTeX source (from file if available) ────────────────────────────
+    if _os.path.exists(_tex):
+        with open(_tex, encoding="utf-8") as _f:
+            latex_src = _f.read()
+        with st.expander("📋 Copy LaTeX source"):
+            st.code(latex_src, language="latex")
+            st.download_button(
+                label="⬇️ Download .tex",
+                data=latex_src,
+                file_name="paper_table.tex",
+                mime="text/plain",
+            )
 
 # ─────────────────────────────────────────────
 # STATISTICAL ANALYSIS
@@ -634,8 +808,8 @@ elif section == "🔬 Statistical Analysis":
             return ""
 
         st.dataframe(
-            _stat_df.style.applymap(_sig_color, subset=["Sig"]),
-            hide_index=True, use_container_width=True,
+            _stat_df.style.map(_sig_color, subset=["Sig"]),
+            hide_index=True, width="stretch",
         )
         st.caption("** p<0.01   * p<0.05   ns = not significant")
 
@@ -656,7 +830,10 @@ elif section == "🔬 Statistical Analysis":
         ax.set_title("Algorithm Comparison: Mean Fitness over 30 Runs")
         ax.grid(axis="y", alpha=0.3)
         _plt.tight_layout()
-        st.pyplot(fig)
+        _buf = _BytesIO()
+        fig.savefig(_buf, format='png', dpi=120, bbox_inches='tight')
+        _buf.seek(0)
+        st.image(_buf)
         _plt.close(fig)
 
         if os.path.exists(_stat_tex):
@@ -698,7 +875,7 @@ elif section == "⚖️ Sensitivity Analysis":
         st.dataframe(pareto_df[["w_peak","w_cost","w_var","w_par",
                                  "peak_red_%","cost_red_%","var_red_%"]]
                      .reset_index(drop=True),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")
 
         st.markdown("---")
         for fname, caption in [
@@ -709,7 +886,7 @@ elif section == "⚖️ Sensitivity Analysis":
         ]:
             path = f"results/{fname}"
             if os.path.exists(path):
-                st.image(path, caption=caption, use_container_width=True)
+                st.image(path, caption=caption, width="stretch")
 
         if os.path.exists(_sens_tex):
             with open(_sens_tex, encoding="utf-8") as _f:
@@ -751,7 +928,7 @@ elif section == "🏹 Pareto Front":
 
         if os.path.exists(_par_png):
             st.image(_par_png, caption="Pareto Front: Peak vs Cost vs Variance",
-                     use_container_width=True)
+                     width="stretch")
 
         st.markdown("**Pareto-optimal solutions**")
         st.dataframe(
@@ -759,7 +936,7 @@ elif section == "🏹 Pareto Front":
                        "peak_red_%","cost_red_%","var_red_%"]]
             .sort_values("peak_red_%", ascending=False)
             .reset_index(drop=True),
-            hide_index=True, use_container_width=True,
+            hide_index=True, width="stretch",
         )
 
         if os.path.exists(_par_tex):
