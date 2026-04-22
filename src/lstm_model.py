@@ -250,7 +250,7 @@ def save_lstm(model: LSTMForecaster,
 
 def load_lstm(path: str = MODEL_PATH) -> tuple:
     """Returns (model, y_scaler) ready for inference."""
-    ckpt     = torch.load(path, map_location="cpu", weights_only=True)
+    ckpt     = torch.load(path, map_location="cpu", weights_only=False)
     model    = LSTMForecaster(ckpt["n_features"],
                                ckpt["hidden1"],
                                ckpt["hidden2"],
@@ -272,10 +272,14 @@ def run_lstm_pipeline(X_train: np.ndarray, y_train: np.ndarray,
     """
     Full LSTM pipeline: train → evaluate → save.
 
-    Uses last 20% of X_train as validation (chronological, no shuffle).
-    Returns (metrics_dict, y_pred_aligned, y_test_aligned).
+    IMPORTANT: y_train and y_test are expected to be SCALED [0,1] values
+    from preprocessing.py's target_scaler. The LSTM trains on scaled targets
+    and predictions are inverse-transformed back to MW before returning.
 
-    y_pred_aligned and y_test_aligned are both trimmed to [WINDOW_SIZE:]
+    Uses last 20% of X_train as validation (chronological, no shuffle).
+    Returns (metrics_dict, y_pred_mw, y_test_mw, train_losses, val_losses).
+
+    y_pred_mw and y_test_mw are both in MW units and trimmed to [WINDOW_SIZE:]
     so they align with the sliding-window offset.
     """
     n_features = X_train.shape[1]
@@ -288,19 +292,28 @@ def run_lstm_pipeline(X_train: np.ndarray, y_train: np.ndarray,
     print(f"\n[run_lstm_pipeline] Features={n_features}  "
           f"Train={len(X_tr):,}  Val={len(X_va):,}  "
           f"Test={len(X_test):,}  Window={WINDOW_SIZE}  Device={device}")
+    print(f"  Input y_train range: [{y_train.min():.4f}, {y_train.max():.4f}] (scaled)")
+    print(f"  Input y_test range:  [{y_test.min():.4f}, {y_test.max():.4f}] (scaled)")
 
     model, y_scaler, train_losses, val_losses = train_lstm(
         X_tr, y_tr, X_va, y_va, n_features, device=device
     )
 
     # Predict on test set — predictions start at index WINDOW_SIZE
-    y_pred_raw     = predict_lstm(model, y_scaler, X_test, device=device)
-    y_test_aligned = y_test[WINDOW_SIZE:]   # align ground truth to same offset
+    y_pred_mw      = predict_lstm(model, y_scaler, X_test, device=device)
+    y_test_aligned = y_test[WINDOW_SIZE:]   # align ground truth to same offset (still scaled)
 
-    metrics = evaluate_lstm(y_test_aligned, y_pred_raw)
+    # y_pred_mw is already in MW (predict_lstm calls y_scaler.inverse_transform)
+    # y_test_aligned is still scaled [0,1] — inverse-transform it to MW
+    y_test_mw = y_scaler.inverse_transform(y_test_aligned)
+
+    print(f"  Output y_pred_mw range: [{y_pred_mw.min():.2f}, {y_pred_mw.max():.2f}] MW")
+    print(f"  Output y_test_mw range: [{y_test_mw.min():.2f}, {y_test_mw.max():.2f}] MW")
+
+    metrics = evaluate_lstm(y_test_mw, y_pred_mw)
     save_lstm(model, y_scaler, n_features)
 
-    return metrics, y_pred_raw, y_test_aligned, train_losses, val_losses
+    return metrics, y_pred_mw, y_test_mw, train_losses, val_losses
 
 
 # ── Quick test ────────────────────────────────────────────────────────────────

@@ -55,8 +55,15 @@ def _mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
 
 
+def inverse_transform_predictions(y_scaled: np.ndarray, target_scaler) -> np.ndarray:
+    """Inverse-transform a 1-D scaled array back to original MW units."""
+    return target_scaler.inverse_transform(
+        np.asarray(y_scaled).reshape(-1, 1)
+    ).ravel()
+
+
 def _compute_four_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
-    """Return RMSE, MAE, R², MAPE rounded to 4 d.p."""
+    """Return RMSE, MAE, R², MAPE rounded to 4 d.p. (values must be on the same scale)."""
     return {
         "RMSE (MW)": round(float(np.sqrt(mean_squared_error(y_true, y_pred))), 4),
         "MAE (MW)":  round(float(mean_absolute_error(y_true, y_pred)), 4),
@@ -72,6 +79,7 @@ def _compute_four_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 def evaluate_model_performance(
     y_test,
     y_pred,
+    target_scaler=None,
     save_plot: bool = True,
     plot_filename: str = "actual_vs_predicted.png",
     n_display: int = 100,
@@ -95,10 +103,20 @@ def evaluate_model_performance(
     y_test = np.asarray(y_test)
     y_pred = np.asarray(y_pred)
 
-    rmse = float(np.sqrt(mean_squared_error(y_test, y_pred)))
-    mae  = float(mean_absolute_error(y_test, y_pred))
-    r2   = float(r2_score(y_test, y_pred))
-    mape = _mape(y_test, y_pred)
+    # Inverse-transform to MW if scaler provided; otherwise assume already in MW
+    if target_scaler is not None:
+        y_test_mw = inverse_transform_predictions(y_test, target_scaler)
+        y_pred_mw = inverse_transform_predictions(y_pred, target_scaler)
+        scale_note = "(inverse-transformed to MW)"
+    else:
+        y_test_mw = y_test
+        y_pred_mw = y_pred
+        scale_note = "(values passed as-is)"
+
+    rmse = float(np.sqrt(mean_squared_error(y_test_mw, y_pred_mw)))
+    mae  = float(mean_absolute_error(y_test_mw, y_pred_mw))
+    r2   = float(r2_score(y_test_mw, y_pred_mw))
+    mape = _mape(y_test_mw, y_pred_mw)
 
     metrics = {
         "RMSE": round(rmse, 4),
@@ -109,6 +127,7 @@ def evaluate_model_performance(
 
     print("\n" + "=" * 55)
     print("        REGRESSION MODEL PERFORMANCE METRICS")
+    print(f"        {scale_note}")
     print("=" * 55)
     print(f"  RMSE  (Root Mean Square Error) : {rmse:>10.4f} MW")
     print(f"        -> avg error penalising large deviations")
@@ -118,6 +137,10 @@ def evaluate_model_performance(
     print(f"        -> {r2*100:.1f}% of load variance explained by model")
     print(f"  MAPE  (Mean Abs. Pct. Error)   : {mape:>10.4f} %")
     print("=" * 55)
+
+    # Swap back so the plot uses MW values
+    y_test = y_test_mw
+    y_pred = y_pred_mw
 
     # ── Plot Actual vs Predicted ──────────────────────────────────────────────
     n   = min(n_display, len(y_test))
@@ -319,21 +342,36 @@ def _load_lstm_model():
         return None, None
 
 
-def _collect_metrics(X_test, y_test) -> dict:
+def _collect_metrics(X_test, y_test, target_scaler=None) -> dict:
     """
     Run inference with every available saved model and return
     {model_name: {metric: value}} without re-training anything.
+
+    If target_scaler is provided, predictions and y_test are inverse-transformed
+    to original MW units before computing metrics — ensuring consistency with
+    the metrics reported during training.
     """
     import sys
     sys.path.insert(0, _ROOT)
 
     y_test_arr = np.asarray(y_test)
-    results    = {}
+
+    # Inverse-transform ground truth to MW once
+    if target_scaler is not None:
+        y_test_mw = inverse_transform_predictions(y_test_arr, target_scaler)
+    else:
+        y_test_mw = y_test_arr
+
+    results = {}
 
     # ── sklearn pipelines (RF / XGBoost / SVR) ───────────────────────────────
     for name, pipeline in _load_sklearn_models().items():
-        y_pred = pipeline.predict(X_test)
-        results[name] = _compute_four_metrics(y_test_arr, np.asarray(y_pred))
+        y_pred_scaled = pipeline.predict(X_test)
+        y_pred_mw = (
+            inverse_transform_predictions(y_pred_scaled, target_scaler)
+            if target_scaler is not None else y_pred_scaled
+        )
+        results[name] = _compute_four_metrics(y_test_mw, y_pred_mw)
         m = results[name]
         print(f"  {name:<16}  RMSE={m['RMSE (MW)']:.4f}  MAE={m['MAE (MW)']:.4f}"
               f"  R²={m['R²']:.4f}  MAPE={m['MAPE (%)']:.2f}%")
@@ -342,9 +380,15 @@ def _collect_metrics(X_test, y_test) -> dict:
     model, y_scaler = _load_lstm_model()
     if model is not None:
         from src.lstm_model import predict_lstm, WINDOW_SIZE
-        y_pred_lstm = predict_lstm(model, y_scaler, np.asarray(X_test), device="cpu")
-        y_true_lstm = y_test_arr[WINDOW_SIZE:]
-        results["LSTM"] = _compute_four_metrics(y_true_lstm, y_pred_lstm)
+        # X_test and y_test are both scaled from preprocessing
+        # predict_lstm returns MW-scale predictions (uses its own y_scaler)
+        y_pred_lstm_mw = predict_lstm(model, y_scaler, np.asarray(X_test), device="cpu")
+        # y_test is scaled [0,1] from preprocessing — inverse-transform to MW
+        y_test_arr = np.asarray(y_test)
+        y_test_mw_full = inverse_transform_predictions(y_test_arr, target_scaler) if target_scaler else y_test_arr
+        # Align to LSTM's window offset
+        y_true_lstm_mw = y_test_mw_full[WINDOW_SIZE:]
+        results["LSTM"] = _compute_four_metrics(y_true_lstm_mw, y_pred_lstm_mw)
         m = results["LSTM"]
         print(f"  {'LSTM':<16}  RMSE={m['RMSE (MW)']:.4f}  MAE={m['MAE (MW)']:.4f}"
               f"  R²={m['R²']:.4f}  MAPE={m['MAPE (%)']:.2f}%")
@@ -503,6 +547,7 @@ def _print_console_table(results: dict) -> None:
 def build_model_comparison_table(
     X_test,
     y_test,
+    target_scaler=None,
     caption: str = (
         "Performance comparison of forecasting models on the DUQ hourly "
         "load dataset (test set, 2005--2018, 80/20 chronological split). "
@@ -533,7 +578,7 @@ def build_model_comparison_table(
     print("  PUBLICATION MODEL COMPARISON TABLE")
     print("=" * 60)
 
-    results = _collect_metrics(X_test, y_test)
+    results = _collect_metrics(X_test, y_test, target_scaler=target_scaler)
 
     if not results:
         print("  [comparison] No model artefacts found — run main.py first.")
@@ -590,6 +635,6 @@ if __name__ == "__main__":
     compare_before_after(y_demo, after, price)
 
     # Layer 3 — publication comparison (requires trained model files)
-    df_results = build_model_comparison_table(X_test, y_test)
+    df_results = build_model_comparison_table(X_test, y_test, target_scaler=target_scaler)
     if not df_results.empty:
         print("\nComparison DataFrame:\n", df_results)

@@ -165,16 +165,40 @@ def train_xgboost(X_train, y_train, use_search: bool = True,
 
 # ── 2. Evaluate — all models are now plain Pipelines, no special-casing ───────
 
-def evaluate_model(pipeline: Pipeline, X_test, y_test):
-    """pipeline.predict() handles scaler + model transparently."""
-    y_pred  = pipeline.predict(X_test)
-    rmse    = np.sqrt(mean_squared_error(y_test, y_pred))
-    mae     = mean_absolute_error(y_test, y_pred)
-    r2      = r2_score(y_test, y_pred)
+def evaluate_model(pipeline: Pipeline, X_test, y_test, target_scaler=None):
+    """
+    Evaluate pipeline on test set.
+
+    If target_scaler is provided, predictions and y_test are inverse-transformed
+    to original MW units before computing RMSE/MAE/R2 — matching the scale
+    used in the paper table and app display.
+    Returns (metrics_dict, y_pred_scaled) where y_pred_scaled is in the same
+    normalised space as y_test (for downstream GOA / plot alignment).
+    """
+    from src.evaluation import inverse_transform_predictions
+    y_pred_scaled = pipeline.predict(X_test)
+    y_test_arr    = np.asarray(y_test)
+
+    if target_scaler is not None:
+        y_true_mw = inverse_transform_predictions(y_test_arr,    target_scaler)
+        y_pred_mw = inverse_transform_predictions(y_pred_scaled, target_scaler)
+        print(f"[evaluate_model] DEBUG scale=MW  "
+              f"y_true=[{y_true_mw.min():.1f}, {y_true_mw.max():.1f}]  "
+              f"y_pred=[{y_pred_mw.min():.1f}, {y_pred_mw.max():.1f}]")
+    else:
+        y_true_mw = y_test_arr
+        y_pred_mw = y_pred_scaled
+        print(f"[evaluate_model] DEBUG scale=normalised  "
+              f"y_true=[{y_true_mw.min():.4f}, {y_true_mw.max():.4f}]  "
+              f"y_pred=[{y_pred_mw.min():.4f}, {y_pred_mw.max():.4f}]")
+
+    rmse    = np.sqrt(mean_squared_error(y_true_mw, y_pred_mw))
+    mae     = mean_absolute_error(y_true_mw, y_pred_mw)
+    r2      = r2_score(y_true_mw, y_pred_mw)
     metrics = {"RMSE": round(rmse, 4), "MAE": round(mae, 4), "R2": round(r2, 4)}
-    print(f"[evaluate_model] RMSE={rmse:.4f}  MAE={mae:.4f}  R2={r2:.4f}")
+    print(f"[evaluate_model] RMSE={rmse:.4f} MW  MAE={mae:.4f} MW  R2={r2:.4f}")
     print(f"[evaluate_model] R2 >= 0.95 -> {'TARGET MET' if r2 >= 0.95 else 'below 0.95'}")
-    return metrics, y_pred
+    return metrics, y_pred_scaled
 
 
 # ── 5. Multi-model comparison ─────────────────────────────────────────────────
