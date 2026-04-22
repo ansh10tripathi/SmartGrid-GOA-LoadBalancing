@@ -41,8 +41,10 @@ def main():
     _root = os.path.dirname(os.path.abspath(__file__))
     X_train, X_test, y_train, y_test, scaler, target_scaler, train_df, test_df = \
         preprocess(os.path.join(_root, "dataset", "DUQ_hourly.csv"))
-    joblib.dump(scaler, os.path.join(_root, "models", "minmax_scaler.pkl"))
+    joblib.dump(scaler,        os.path.join(_root, "models", "minmax_scaler.pkl"))
+    joblib.dump(target_scaler, os.path.join(_root, "models", "target_scaler.pkl"))
     print("  MinMaxScaler saved -> models/minmax_scaler.pkl")
+    print("  TargetScaler saved -> models/target_scaler.pkl")
 
     # ── Step 1.1: temp_C vs Load correlation plot ────────────────────────────
     print("\nStep 1.1: Plotting temp_C vs Load correlation...")
@@ -145,13 +147,14 @@ def main():
     svr_pipeline = train_svr(X_train,            y_train, use_search=True)
     xgb_pipeline = train_xgboost(X_train,        y_train, use_search=True)
 
-    rf_metrics,  y_pred_rf  = evaluate_model(rf_pipeline,  X_test, y_test)
-    svr_metrics, y_pred_svr = evaluate_model(svr_pipeline, X_test, y_test)
-    xgb_metrics, y_pred_xgb = evaluate_model(xgb_pipeline, X_test, y_test)
+    rf_metrics,  y_pred_rf  = evaluate_model(rf_pipeline,  X_test, y_test, target_scaler)
+    svr_metrics, y_pred_svr = evaluate_model(svr_pipeline, X_test, y_test, target_scaler)
+    xgb_metrics, y_pred_xgb = evaluate_model(xgb_pipeline, X_test, y_test, target_scaler)
 
     all_metrics = {"RandomForest": rf_metrics, "SVR": svr_metrics, "XGBoost": xgb_metrics}
     all_preds   = {"RandomForest": y_pred_rf,  "SVR": y_pred_svr,  "XGBoost": y_pred_xgb}
 
+    # Select best model by R2 (should be XGBoost after fixing scaling)
     candidates = [
         ("RandomForest", rf_pipeline,  rf_metrics,  y_pred_rf),
         ("SVR",          svr_pipeline, svr_metrics, y_pred_svr),
@@ -160,7 +163,12 @@ def main():
     best_name, model, metrics, y_pred = max(candidates, key=lambda t: t[2]["R2"])
     print(f"  Best model: {best_name}  R²={metrics['R2']:.4f}")
     save_model(model)
-    evaluate_model_performance(y_test, y_pred)
+    
+    # Inverse-transform y_pred for visualization (it's currently scaled)
+    from src.evaluation import inverse_transform_predictions
+    y_pred_mw = inverse_transform_predictions(np.asarray(y_pred), target_scaler)
+    y_test_mw = inverse_transform_predictions(np.asarray(y_test), target_scaler)
+    evaluate_model_performance(y_test_mw, y_pred_mw, target_scaler=None)  # Already in MW
 
     # ── Save individual model artefacts for paper_comparison / evaluation ────
     # evaluation._load_sklearn_models() looks for these specific filenames.
@@ -198,7 +206,8 @@ def main():
 
     # LSTM vs XGBoost vs actual (first 336 h = 2 weeks)
     n_plot     = 336
-    ml_aligned = y_pred[WINDOW_SIZE : WINDOW_SIZE + n_plot]
+    # y_pred_mw is in MW, need to align with LSTM window offset
+    ml_aligned = y_pred_mw[WINDOW_SIZE : WINDOW_SIZE + n_plot]
     lstm_plot  = lstm_pred[:n_plot]
     true_plot  = lstm_true[:n_plot]
     fig, ax = plt.subplots(figsize=(13, 4))
@@ -239,6 +248,7 @@ def main():
     q_metrics = run_quantile_pipeline(
         X_train.values, y_train.values,
         X_test.values,  y_test.values,
+        target_scaler=target_scaler,
     )
     print(f"  Quantile metrics: {q_metrics}")
     all_metrics["QR-Median"] = {
@@ -287,30 +297,31 @@ def main():
     # ── Step 2.8: Paper comparison table (uses saved model artefacts) ─────────
     print("\nStep 2.8: Building publication comparison table...")
     from src.paper_comparison import run_paper_comparison
-    run_paper_comparison()
+    run_paper_comparison(target_scaler=target_scaler)
 
     # ── Step 3: Leakage audit ───────────────────────────────────────────────
     print("\nStep 3: Running Leakage Audit...")
-    run_audit(model, X_test, y_test, train_df, test_df)
+    run_audit(model, X_test, y_test, train_df, test_df, target_scaler=target_scaler)
 
     # ── Step 4: GOA optimisation (best model predictions) ────────────────────
     print("\nStep 4: Running GOA Optimization (best model)...")
-    price_test = test_df["tou_price"].values[:len(y_pred)]
+    # y_pred_mw is already in MW units from the inverse transform above
+    price_test = test_df["tou_price"].values[:len(y_pred_mw)]
 
     goa_result     = grasshopper_optimization(
-        predicted_load=y_pred, price=price_test,
+        predicted_load=y_pred_mw, price=price_test,
         n_grasshoppers=30, max_iter=100,
     )
     optimized_load = goa_result["optimized_load"]
 
     # ── Step 4: Evaluate before vs after ─────────────────────────────────────
     print("\nStep 4: Evaluating Results...")
-    compare_before_after(y_pred, optimized_load, price_test)
+    compare_before_after(y_pred_mw, optimized_load, price_test)
 
     # ── Step 4b: Constraint comparison plot ──────────────────────────────────
     print("\nStep 4b: Plotting constraint comparison...")
     plot_constraint_comparison(
-        y_pred, optimized_load,
+        y_pred_mw, optimized_load,
         goa_result["max_ramp_rate"],
         goa_result["grid_max"],
         goa_result["load_min"],
@@ -321,15 +332,15 @@ def main():
 
     # 5a – Before vs After load curve
     plt.figure(figsize=(12, 5))
-    plt.plot(y_pred,        label="Before GOA", color="tomato",   linewidth=1.4)
+    plt.plot(y_pred_mw,        label="Before GOA", color="tomato",   linewidth=1.4)
     plt.plot(optimized_load, label="After GOA",  color="seagreen", linewidth=1.4)
-    plt.axhline(y_pred.max(),        color="red",       linestyle=":",  linewidth=1,
-                label=f"Peak before = {y_pred.max():.1f} kWh")
+    plt.axhline(y_pred_mw.max(),        color="red",       linestyle=":",  linewidth=1,
+                label=f"Peak before = {y_pred_mw.max():.1f} MW")
     plt.axhline(optimized_load.max(), color="darkgreen", linestyle=":",  linewidth=1,
-                label=f"Peak after  = {optimized_load.max():.1f} kWh")
+                label=f"Peak after  = {optimized_load.max():.1f} MW")
     plt.title("Load Schedule: Before vs After GOA Optimisation")
     plt.xlabel("Time Step (hours)")
-    plt.ylabel("Load (kWh)")
+    plt.ylabel("Load (MW)")
     plt.legend(fontsize=8)
     plt.grid(alpha=0.3)
     plt.tight_layout()
@@ -337,18 +348,18 @@ def main():
 
     # 🔥 Extra Zoomed Comparison (first 200 points)
     plt.figure(figsize=(10, 4))
-    plt.plot(y_pred[:200], label="Before GOA", color="tomato")
+    plt.plot(y_pred_mw[:200], label="Before GOA", color="tomato")
     plt.plot(optimized_load[:200], label="After GOA", color="seagreen")
     plt.legend()
     plt.title("GOA Load Comparison (First 200 Points)")
     plt.xlabel("Time Step")
-    plt.ylabel("Load (kWh)")
+    plt.ylabel("Load (MW)")
     plt.grid(alpha=0.3)
 
     _save(os.path.abspath(os.path.join(RESULTS_DIR, "goa_comparison.png")))
 
     # 5b – Cost comparison bar chart
-    before_cost = float(np.sum(y_pred * price_test))
+    before_cost = float(np.sum(y_pred_mw * price_test))
     after_cost  = float(np.sum(optimized_load * price_test))
     plt.figure(figsize=(6, 4))
     bars = plt.bar(["Before GOA", "After GOA"], [before_cost, after_cost],
@@ -373,10 +384,10 @@ def main():
     _save(os.path.abspath(os.path.join(RESULTS_DIR, "goa_convergence.png")))
 
     # 5d – Normalised performance comparison (separate subplots — different scales)
-    m_before = compute_metrics(y_pred,         price_test, "Before GOA")
+    m_before = compute_metrics(y_pred_mw,         price_test, "Before GOA")
     m_after  = compute_metrics(optimized_load, price_test, "After GOA")
     kpi_keys   = ["peak_load", "total_cost", "PAR", "variance"]
-    kpi_labels = ["Peak Load (kWh)", "Total Cost ($)", "PAR", "Variance"]
+    kpi_labels = ["Peak Load (MW)", "Total Cost ($)", "PAR", "Variance"]
 
     fig, axes = plt.subplots(1, 4, figsize=(14, 4))
     for ax, key, label in zip(axes, kpi_keys, kpi_labels):
@@ -399,7 +410,7 @@ def main():
 
     # ── Step 5e: Algorithm comparison CSV + PNG (GOA KPIs table) ─────────────
     print("\nStep 5e: Saving algorithm comparison table...")
-    m_before = compute_metrics(y_pred,         price_test, "Before GOA")
+    m_before = compute_metrics(y_pred_mw,         price_test, "Before GOA")
     m_after  = compute_metrics(optimized_load, price_test, "After GOA")
     algo_df  = pd.DataFrame([
         {
@@ -464,15 +475,15 @@ def main():
 
     # GOA KPIs
     goa_kpis = {
-        "peak_before":    _safe_float(y_pred.max()),
+        "peak_before":    _safe_float(y_pred_mw.max()),
         "peak_after":     _safe_float(optimized_load.max()),
-        "peak_pct":       round((_safe_float(optimized_load.max()) - _safe_float(y_pred.max())) / _safe_float(y_pred.max()) * 100, 2),
-        "cost_before":    _safe_float(np.sum(y_pred * price_test)),
+        "peak_pct":       round((_safe_float(optimized_load.max()) - _safe_float(y_pred_mw.max())) / _safe_float(y_pred_mw.max()) * 100, 2),
+        "cost_before":    _safe_float(np.sum(y_pred_mw * price_test)),
         "cost_after":     _safe_float(np.sum(optimized_load * price_test)),
-        "cost_pct":       round((_safe_float(np.sum(optimized_load * price_test)) - _safe_float(np.sum(y_pred * price_test))) / _safe_float(np.sum(y_pred * price_test)) * 100, 2),
-        "par_before":     _safe_float(float(y_pred.max()) / float(y_pred.mean())),
+        "cost_pct":       round((_safe_float(np.sum(optimized_load * price_test)) - _safe_float(np.sum(y_pred_mw * price_test))) / _safe_float(np.sum(y_pred_mw * price_test)) * 100, 2),
+        "par_before":     _safe_float(float(y_pred_mw.max()) / float(y_pred_mw.mean())),
         "par_after":      _safe_float(float(optimized_load.max()) / float(optimized_load.mean())),
-        "var_before":     _safe_float(np.var(y_pred)),
+        "var_before":     _safe_float(np.var(y_pred_mw)),
         "var_after":      _safe_float(np.var(optimized_load)),
         "best_model":     best_name,
         "best_fitness":   _safe_float(goa_result["best_fitness"]),
@@ -496,19 +507,30 @@ def main():
         return out
 
     y_test_arr = np.asarray(y_test)
+    from src.evaluation import inverse_transform_predictions
+    y_test_mw = inverse_transform_predictions(y_test_arr, target_scaler)
 
     model_results = {
         "RandomForest": {
             **_norm(rf_metrics),
-            "MAPE": round(_mape(y_test_arr, np.asarray(y_pred_rf)), 4),
+            "MAPE": round(_mape(
+                y_test_mw,
+                inverse_transform_predictions(np.asarray(y_pred_rf), target_scaler)
+            ), 4),
         },
         "SVR": {
             **_norm(svr_metrics),
-            "MAPE": round(_mape(y_test_arr, np.asarray(y_pred_svr)), 4),
+            "MAPE": round(_mape(
+                y_test_mw,
+                inverse_transform_predictions(np.asarray(y_pred_svr), target_scaler)
+            ), 4),
         },
         "XGBoost": {
             **_norm(xgb_metrics),
-            "MAPE": round(_mape(y_test_arr, np.asarray(y_pred_xgb)), 4),
+            "MAPE": round(_mape(
+                y_test_mw,
+                inverse_transform_predictions(np.asarray(y_pred_xgb), target_scaler)
+            ), 4),
         },
         "LSTM": {
             **_norm(lstm_metrics),
