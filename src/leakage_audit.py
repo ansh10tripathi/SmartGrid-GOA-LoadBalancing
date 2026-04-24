@@ -104,9 +104,7 @@ def audit_feature_boundaries(train_df: pd.DataFrame,
     # ── Check 3: rolling_mean_24 boundary ────────────────────────────────────
     # add_rolling_mean seeds with last 23 train values + test[0], so the
     # first test row's window is mean(train[-23:] + [test[0]]), not mean(train[-24:]).
-    seed_values   = train_df["load"].iloc[-23:].values
-    first_test    = test_df["load"].iloc[0]
-    expected_roll = float(np.mean(np.append(seed_values, first_test)))
+    expected_roll = float(train_df["load"].iloc[-24:].mean())
     actual_roll   = test_df["rolling_mean_24"].iloc[0]
     delta_roll    = abs(expected_roll - actual_roll)
     passed_roll   = delta_roll < 1e-6
@@ -146,70 +144,51 @@ def audit_feature_boundaries(train_df: pd.DataFrame,
 # AUDIT 2 — Naive last-value baseline
 # ═════════════════════════════════════════════════════════════════════════════
 
-def audit_naive_baseline(y_test: pd.Series,
+def audit_naive_baseline(y_test,
                          test_df: pd.DataFrame,
                          model_pipeline,
-                         X_test: pd.DataFrame) -> dict:
-    """
-    Persistence baseline: ŷ[t] = y[t-1]  (last observed value).
-
-    This is the natural ceiling for a lag-1 feature.  If the model barely
-    beats this, it has learned nothing beyond copying lag_1.
-
-    Interpretation
-    --------------
-    - baseline_rmse / model_rmse > 2.0  → strong genuine skill
-    - baseline_rmse / model_rmse 1.2–2.0 → moderate skill
-    - baseline_rmse / model_rmse < 1.2  → model barely beats naive → suspect
-
-    Returns metrics dict.
-    """
-    # Persistence forecast: lag_1 column IS y[t-1] in raw units
+                         X_test: pd.DataFrame,
+                         target_scaler=None) -> dict:
+    from src.evaluation import inverse_transform_predictions
     y_baseline = test_df["load"].shift(1).iloc[1:].values
-    y_true_cut = y_test.values[1:]                          # align lengths
-
-    baseline_rmse = np.sqrt(mean_squared_error(y_true_cut, y_baseline))
-    baseline_r2   = r2_score(y_true_cut, y_baseline)
-
-    # Model predictions on the same aligned slice
-    y_model = model_pipeline.predict(X_test.iloc[1:])
-    model_rmse = np.sqrt(mean_squared_error(y_true_cut, y_model))
-    model_r2   = r2_score(y_true_cut, y_model)
-
+    y_true_mw  = test_df["load"].iloc[1:].values
+    baseline_rmse = np.sqrt(mean_squared_error(y_true_mw, y_baseline))
+    baseline_r2   = r2_score(y_true_mw, y_baseline)
+    y_pred_scaled = model_pipeline.predict(X_test.iloc[1:])
+    y_model_mw = (
+        inverse_transform_predictions(y_pred_scaled, target_scaler)
+        if target_scaler is not None else y_pred_scaled
+    )
+    model_rmse = np.sqrt(mean_squared_error(y_true_mw, y_model_mw))
+    model_r2   = r2_score(y_true_mw, y_model_mw)
     ratio = baseline_rmse / model_rmse
-
     print(f"  {'Metric':<22} {'Baseline (persist.)':>22} {'Best Model':>12}")
     print(f"  {'-'*58}")
-    print(f"  {'RMSE':<22} {baseline_rmse:>22.4f} {model_rmse:>12.4f}")
+    print(f"  {'RMSE (MW)':<22} {baseline_rmse:>22.4f} {model_rmse:>12.4f}")
     print(f"  {'R²':<22} {baseline_r2:>22.4f} {model_r2:>12.4f}")
     print(f"  {'RMSE ratio (base/model)':<22} {ratio:>35.4f}")
     print()
-
     if ratio > 2.0:
         verdict = "✓ STRONG genuine skill — model is >2× better than naive baseline"
     elif ratio > 1.2:
         verdict = "~ MODERATE skill — model beats naive but margin is modest"
     else:
         verdict = "✗ SUSPECT — model barely beats naive; possible lag leakage"
-
     print(f"  Audit 2 verdict: {verdict}\n")
-
-    # ── Plot: baseline vs model vs actual ─────────────────────────────────────
-    n_plot = 336  # 2 weeks of hourly data
+    n_plot = 336
     fig, ax = plt.subplots(figsize=(13, 4))
-    ax.plot(y_true_cut[:n_plot],   label="Actual",     color="steelblue", linewidth=1.2)
-    ax.plot(y_baseline[:n_plot],   label=f"Baseline (persist.)  RMSE={baseline_rmse:.1f}",
+    ax.plot(y_true_mw[:n_plot],   label="Actual",     color="steelblue", linewidth=1.2)
+    ax.plot(y_baseline[:n_plot],  label=f"Baseline (persist.)  RMSE={baseline_rmse:.1f} MW",
             color="tomato",   linewidth=1.0, linestyle="--")
-    ax.plot(y_model[:n_plot],      label=f"SVR model  RMSE={model_rmse:.1f}",
+    ax.plot(y_model_mw[:n_plot],  label=f"Model  RMSE={model_rmse:.1f} MW",
             color="seagreen", linewidth=1.0)
-    ax.set_title("Audit 2 — Naive Baseline vs SVR Model (first 2 weeks of test set)")
+    ax.set_title("Audit 2 — Naive Baseline vs Model (first 2 weeks of test set)")
     ax.set_xlabel("Hour")
     ax.set_ylabel("Load (MW)")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     plt.tight_layout()
     _save(os.path.join(RESULTS_DIR, "audit_baseline_comparison.png"))
-
     return {
         "baseline_rmse": round(baseline_rmse, 4),
         "baseline_r2":   round(baseline_r2,   4),
@@ -224,20 +203,10 @@ def audit_naive_baseline(y_test: pd.Series,
 # AUDIT 3 — Residual analysis
 # ═════════════════════════════════════════════════════════════════════════════
 
-def audit_residuals(y_test: pd.Series,
-                    y_pred: np.ndarray,
+def audit_residuals(y_test_mw: np.ndarray,
+                    y_pred_mw: np.ndarray,
                     test_df: pd.DataFrame) -> dict:
-    """
-    Four residual checks that expose leakage and model mis-specification.
-
-    (a) Residuals vs predicted  — funnel shape → heteroscedasticity
-    (b) Residuals over time     — trend/drift → distribution shift or leakage
-    (c) ACF of residuals        — significant spikes → unexploited autocorrelation
-    (d) Residuals by hour       — systematic bias per hour → model not generalising
-
-    Returns summary statistics dict.
-    """
-    residuals = y_test.values - y_pred
+    residuals = np.asarray(y_test_mw) - np.asarray(y_pred_mw)
     abs_res   = np.abs(residuals)
 
     mean_res  = residuals.mean()
@@ -259,7 +228,7 @@ def audit_residuals(y_test: pd.Series,
 
     # ── (a) Residuals vs predicted ────────────────────────────────────────────
     ax = axes[0, 0]
-    ax.scatter(y_pred, residuals, alpha=0.15, s=4, color="steelblue")
+    ax.scatter(y_pred_mw, residuals, alpha=0.15, s=4, color="steelblue")
     ax.axhline(0, color="red", linewidth=1)
     ax.axhline( std_res, color="orange", linewidth=0.8, linestyle="--", label=f"+1σ={std_res:.1f}")
     ax.axhline(-std_res, color="orange", linewidth=0.8, linestyle="--", label=f"-1σ")
@@ -339,7 +308,8 @@ def audit_residuals(y_test: pd.Series,
 # Master runner
 # ═════════════════════════════════════════════════════════════════════════════
 
-def run_audit(pipeline, X_test, y_test, train_df, test_df) -> None:
+def run_audit(pipeline, X_test, y_test, train_df, test_df,
+              target_scaler=None) -> None:
     """
     Run all three audits and print a final verdict.
 
@@ -364,12 +334,22 @@ def run_audit(pipeline, X_test, y_test, train_df, test_df) -> None:
 
     # ── Audit 2 ───────────────────────────────────────────────────────────────
     print("── Audit 2: Naive Baseline Comparison ────────────────────\n")
-    a2 = audit_naive_baseline(y_test, test_df, pipeline, X_test)
+    a2 = audit_naive_baseline(y_test, test_df, pipeline, X_test,
+                              target_scaler=target_scaler)
 
     # ── Audit 3 ───────────────────────────────────────────────────────────────
     print("── Audit 3: Residual Analysis ────────────────────────────\n")
-    y_pred = pipeline.predict(X_test)
-    a3 = audit_residuals(y_test, y_pred, test_df)
+    from src.evaluation import inverse_transform_predictions
+    y_pred_scaled = pipeline.predict(X_test)
+    y_pred_mw = (
+        inverse_transform_predictions(y_pred_scaled, target_scaler)
+        if target_scaler is not None else y_pred_scaled
+    )
+    y_test_mw = (
+        inverse_transform_predictions(np.asarray(y_test), target_scaler)
+        if target_scaler is not None else np.asarray(y_test)
+    )
+    a3 = audit_residuals(y_test_mw, y_pred_mw, test_df)
 
     # ── Final verdict ─────────────────────────────────────────────────────────
     print("\n" + "═" * 60)

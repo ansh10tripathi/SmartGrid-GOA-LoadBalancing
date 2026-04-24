@@ -222,18 +222,33 @@ def load_predictions() -> dict | None:
 # ── 6. Master pipeline ────────────────────────────────────────────────────────
 
 def run_quantile_pipeline(X_train: np.ndarray, y_train: np.ndarray,
-                           X_test:  np.ndarray, y_test:  np.ndarray) -> dict:
+                           X_test:  np.ndarray, y_test:  np.ndarray,
+                           target_scaler=None) -> dict:
     """
     Train → predict → evaluate → plot → save.
+
+    If target_scaler is provided, metrics and saved predictions are
+    inverse-transformed to original MW units for consistency with the
+    paper table and app display.
     Returns metrics dict.
     """
     models  = train_quantile_models(X_train, y_train)
     preds   = predict_quantiles(models, X_test)
-    metrics = evaluate_quantiles(y_test, preds)
 
-    plot_ribbon(y_test, preds, metrics)
+    if target_scaler is not None:
+        from src.evaluation import inverse_transform_predictions
+        y_test_eval  = inverse_transform_predictions(y_test, target_scaler)
+        preds_eval   = {q: inverse_transform_predictions(p, target_scaler)
+                        for q, p in preds.items()}
+    else:
+        y_test_eval = y_test
+        preds_eval  = preds
+
+    metrics = evaluate_quantiles(y_test_eval, preds_eval)
+
+    plot_ribbon(y_test_eval, preds_eval, metrics)
     save_quantile_models(models)
-    save_predictions(y_test, preds, metrics)
+    save_predictions(y_test_eval, preds_eval, metrics)
 
     return metrics
 

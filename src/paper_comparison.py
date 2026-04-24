@@ -27,6 +27,7 @@ sys.path.insert(0, _ROOT)
 
 
 def run_paper_comparison(
+    target_scaler=None,
     caption: str = (
         "Performance comparison of forecasting models on the DUQ hourly "
         "load dataset (test set, 2005--2018). "
@@ -38,17 +39,21 @@ def run_paper_comparison(
     Full pipeline: load data -> load saved models -> metrics -> table -> chart.
     Delegates entirely to evaluation.build_model_comparison_table.
 
+    If target_scaler is provided, all metrics are computed on original MW scale.
     Returns the results DataFrame (rows = models, cols = metrics).
     """
     from src.preprocessing import preprocess
     from src.evaluation    import build_model_comparison_table
 
     print("\n[paper_comparison] Loading and preprocessing data...")
-    _, X_test, _, y_test, _, _, _, _ = \
+    _, X_test, _, y_test, _, saved_target_scaler, _, _ = \
         preprocess(os.path.join(_ROOT, "dataset", "DUQ_hourly.csv"))
 
+    # Prefer the caller-supplied scaler; fall back to the one from preprocess
+    scaler_to_use = target_scaler if target_scaler is not None else saved_target_scaler
+
     return build_model_comparison_table(
-        X_test, y_test, caption=caption, label=label
+        X_test, y_test, target_scaler=scaler_to_use, caption=caption, label=label
     )
 
 
