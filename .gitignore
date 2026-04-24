@@ -39,3 +39,6 @@ v.txt
 # Ignore models
 models/
 *.pkl
+
+.streamlit/
+*.md
