@@ -16,12 +16,14 @@ st.set_page_config(
 # ─────────────────────────────────────────────
 # LOAD MODEL
 # ─────────────────────────────────────────────
-MODEL_PATH  = "models/load_forecast_model.pkl"
-SCALER_PATH = "models/minmax_scaler.pkl"
+MODEL_PATH         = "models/load_forecast_model.pkl"
+SCALER_PATH        = "models/minmax_scaler.pkl"
+TARGET_SCALER_PATH = "models/target_scaler.pkl"
 
 # Model is now always a sklearn Pipeline — no dict unwrapping needed
-pipeline      = joblib.load(MODEL_PATH)  if os.path.exists(MODEL_PATH)  else None
-minmax_scaler = joblib.load(SCALER_PATH) if os.path.exists(SCALER_PATH) else None
+pipeline      = joblib.load(MODEL_PATH)         if os.path.exists(MODEL_PATH)         else None
+minmax_scaler = joblib.load(SCALER_PATH)        if os.path.exists(SCALER_PATH)        else None
+target_scaler = joblib.load(TARGET_SCALER_PATH) if os.path.exists(TARGET_SCALER_PATH) else None
 
 # ── Single source of truth: load model_results.json once at startup ──────────
 import json as _json
@@ -208,21 +210,22 @@ elif section == "📈 Model Analysis":
             }
         _ma_df = pd.DataFrame(_rows).T
 
-        def _ma_highlight(col):
-            higher = col.name == "R²"
-            best   = col.max() if higher else col.min()
-            return [
-                "background-color:#1a6b3c; color:#fff; font-weight:bold"
-                if (v is not None and abs(float(v) - best) < 1e-9) else ""
-                for v in col
-            ]
+        # Determine best model by R² (highest)
+        _ma_best_model = _ma_df["R²"].idxmax()
+
+        def _ma_highlight_row(row):
+            """Highlight entire row if it's the best model (by R²)."""
+            if row.name == _ma_best_model:
+                return ["background-color:#1a6b3c; color:#fff; font-weight:bold"] * len(row)
+            return [""] * len(row)
 
         fmt = {c: ("{:.4f}" if c == "R²" else "{:.4f}") for c in _ma_df.columns
                if _ma_df[c].notna().any()}
         st.dataframe(
-            _ma_df.style.format(fmt, na_rep="—").apply(_ma_highlight, axis=0),
+            _ma_df.style.format(fmt, na_rep="—").apply(_ma_highlight_row, axis=1),
             width="stretch",
         )
+        st.caption(f"✓ Best model: **{_ma_best_model}** (highest R²)")
         st.markdown("---")
 
     # ── Model selector ────────────────────────────────────────────────────────
@@ -394,19 +397,47 @@ elif section == "🔮 Live Prediction":
         lag_1, lag_2, lag_3, lag_21, lag_24, lag_48, lag_168, rolling_mean_24
     ]], columns=FEATURE_COLS)
 
-    if pipeline is not None and minmax_scaler is not None:
-        # pipeline already contains an internal StandardScaler.
-        # minmax_scaler normalises the raw MW lag/rolling features so they
-        # are on the same [0,1] scale the pipeline was trained on.
+    # Debug: show raw input vector
+    with st.expander("🔍 Debug: raw input vector"):
+        st.dataframe(raw_input)
+
+    if pipeline is None:
+        st.error("Model not loaded! Run `python main.py` first.")
+    elif minmax_scaler is None:
+        st.warning("MinMax scaler not found. Re-run `python main.py` to generate it.")
+    elif target_scaler is None:
+        st.warning("Target scaler not found. Re-run `python main.py` to regenerate models.")
+    else:
+        # Step 1: scale features with the same MinMaxScaler used during training
         input_scaled = pd.DataFrame(
             minmax_scaler.transform(raw_input), columns=FEATURE_COLS
         )
-        prediction = pipeline.predict(input_scaled)[0]
-        st.success(f"⚡ Predicted Load: {prediction:.2f} MW")
-    elif minmax_scaler is None:
-        st.warning("MinMax scaler not found. Re-run `python main.py` to generate it.")
-    else:
-        st.error("Model not loaded!")
+        print(f"[DEBUG] Feature vector (MinMax-scaled, pre-pipeline):")
+        print(input_scaled.to_string())
+        print(f"[DEBUG] Feature scaler fitted: {minmax_scaler is not None}")
+        print(f"[DEBUG] Target scaler fitted:  {target_scaler is not None}")
+        # Step 2: pipeline.predict() applies its internal StandardScaler then the model
+        #         -> output is in normalised [0,1] target space
+        pred_normalised = pipeline.predict(input_scaled)[0]
+        print(f"[DEBUG] Normalised prediction (scaled target space): {pred_normalised:.6f}")
+        # Step 3: inverse-transform back to MW using the saved target scaler
+        prediction_mw = target_scaler.inverse_transform(
+            np.array([[pred_normalised]])
+        )[0, 0]
+        print(f"[DEBUG] Inverse-transformed prediction (MW): {prediction_mw:.2f}")
+        st.success(f"⚡ Predicted Load: {prediction_mw:.1f} MW")
+        with st.expander("🔍 Debug: feature vector, scaling info & prediction"):
+            st.markdown("**Raw input (unscaled)**")
+            st.dataframe(raw_input)
+            st.markdown("**MinMax-scaled input (fed to pipeline)**")
+            st.dataframe(input_scaled)
+            st.write(f"Normalised prediction (target space [0,1]): `{pred_normalised:.6f}`")
+            st.write(f"Inverse-transformed to MW: `{prediction_mw:.2f} MW`")
+            st.caption(
+                "Pipeline flow: raw → MinMaxScaler (feature) → "
+                "Pipeline(StandardScaler → model) → normalised target → "
+                "target_scaler.inverse_transform → MW"
+            )
 
 # ─────────────────────────────────────────────
 # UNCERTAINTY BOUNDS
