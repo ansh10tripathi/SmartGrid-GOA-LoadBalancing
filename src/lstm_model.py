@@ -198,12 +198,16 @@ def train_lstm(X_train: np.ndarray, y_train: np.ndarray,
 # ── 5. Inference ──────────────────────────────────────────────────────────────
 
 def predict_lstm(model: LSTMForecaster,
-                 y_scaler: MinMaxTargetScaler,
+                 y_scaler,
                  X: np.ndarray,
                  device: str = "cpu") -> np.ndarray:
     """
     Run inference on X and return predictions in original MW units.
     Returns array of length len(X) - WINDOW_SIZE.
+    
+    y_scaler can be either:
+    - MinMaxTargetScaler (internal)
+    - sklearn MinMaxScaler (from preprocessing.py)
     """
     model.eval()
     dummy_y = np.zeros(len(X))
@@ -214,7 +218,15 @@ def predict_lstm(model: LSTMForecaster,
         for xb, _ in dl:
             preds.append(model(xb.to(device)).cpu().numpy())
     preds_sc = np.concatenate(preds)
-    return y_scaler.inverse_transform(preds_sc)
+    
+    # Handle both sklearn and internal scaler
+    from src.evaluation import inverse_transform_predictions
+    if hasattr(y_scaler, 'inverse_transform') and hasattr(y_scaler, 'data_min_'):
+        # sklearn MinMaxScaler
+        return inverse_transform_predictions(preds_sc, y_scaler)
+    else:
+        # Internal MinMaxTargetScaler
+        return y_scaler.inverse_transform(preds_sc)
 
 
 # ── 6. Evaluate ───────────────────────────────────────────────────────────────
@@ -232,15 +244,30 @@ def evaluate_lstm(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 # ── 7. Save / Load ────────────────────────────────────────────────────────────
 
 def save_lstm(model: LSTMForecaster,
-              y_scaler: MinMaxTargetScaler,
+              y_scaler,
               n_features: int,
               path: str = MODEL_PATH) -> None:
+    """
+    Save LSTM model and scaler info.
+    Handles both sklearn MinMaxScaler and internal MinMaxTargetScaler.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    
+    # Extract min/max from either scaler type
+    if hasattr(y_scaler, 'data_min_') and hasattr(y_scaler, 'data_max_'):
+        # sklearn MinMaxScaler
+        y_min = float(y_scaler.data_min_[0])
+        y_max = float(y_scaler.data_max_[0])
+    else:
+        # Internal MinMaxTargetScaler
+        y_min = float(y_scaler.min_)
+        y_max = float(y_scaler.max_)
+    
     torch.save({
         "state_dict": model.state_dict(),
         "n_features": n_features,
-        "y_min":      y_scaler.min_,
-        "y_max":      y_scaler.max_,
+        "y_min":      y_min,
+        "y_max":      y_max,
         "hidden1":    HIDDEN1,
         "hidden2":    HIDDEN2,
         "dropout":    DROPOUT,
@@ -268,13 +295,16 @@ def load_lstm(path: str = MODEL_PATH) -> tuple:
 
 def run_lstm_pipeline(X_train: np.ndarray, y_train: np.ndarray,
                       X_test:  np.ndarray, y_test:  np.ndarray,
+                      target_scaler = None,
                       device:  str = "cpu") -> tuple:
     """
     Full LSTM pipeline: train → evaluate → save.
 
-    IMPORTANT: y_train and y_test are expected to be SCALED [0,1] values
-    from preprocessing.py's target_scaler. The LSTM trains on scaled targets
-    and predictions are inverse-transformed back to MW before returning.
+    CRITICAL: To ensure fair comparison with RF/SVR/XGBoost:
+    - If target_scaler is provided, y_train and y_test are ALREADY scaled [0,1]
+    - LSTM will use the SAME scaler (passed from preprocessing.py)
+    - Predictions are inverse-transformed ONCE using the shared scaler
+    - All models (RF/SVR/XGB/LSTM) now use identical scaling
 
     Uses last 20% of X_train as validation (chronological, no shuffle).
     Returns (metrics_dict, y_pred_mw, y_test_mw, train_losses, val_losses).
@@ -294,21 +324,105 @@ def run_lstm_pipeline(X_train: np.ndarray, y_train: np.ndarray,
           f"Test={len(X_test):,}  Window={WINDOW_SIZE}  Device={device}")
     print(f"  Input y_train range: [{y_train.min():.4f}, {y_train.max():.4f}] (scaled)")
     print(f"  Input y_test range:  [{y_test.min():.4f}, {y_test.max():.4f}] (scaled)")
+    print(f"  CRITICAL: y_train and y_test are ALREADY scaled [0,1] from preprocessing")
+    print(f"  CRITICAL: Will use data as-is, NO additional scaling")
 
-    model, y_scaler, train_losses, val_losses = train_lstm(
-        X_tr, y_tr, X_va, y_va, n_features, device=device
+    # Use shared target_scaler if provided, otherwise create internal one
+    if target_scaler is not None:
+        print("  [LSTM] Using SHARED target_scaler from preprocessing (consistent with RF/XGB/SVR)")
+        y_scaler = target_scaler
+        # CRITICAL: y_train and y_test are ALREADY scaled [0,1] from preprocessing
+        # Do NOT scale again - use directly for training
+        y_tr_for_training = y_tr
+        y_va_for_training = y_va
+    else:
+        print("  [LSTM] Creating INTERNAL target_scaler (standalone mode)")
+        y_scaler = MinMaxTargetScaler().fit(y_tr)
+        y_tr_for_training = y_scaler.transform(y_tr)
+        y_va_for_training = y_scaler.transform(y_va)
+
+    # Train LSTM with scaled targets
+    train_ds = WindowDataset(X_tr, y_tr_for_training)
+    val_ds   = WindowDataset(X_va, y_va_for_training)
+    train_dl = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=False)
+    val_dl   = DataLoader(val_ds,   batch_size=BATCH_SIZE, shuffle=False)
+
+    model     = LSTMForecaster(n_features).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, patience=5, factor=0.5, verbose=False
     )
+    criterion = nn.MSELoss()
+
+    best_val_loss = float("inf")
+    best_state    = None
+    no_improve    = 0
+    train_losses, val_losses = [], []
+
+    for epoch in range(1, MAX_EPOCHS + 1):
+        # ── train ──────────────────────────────────────────────────────────
+        model.train()
+        t_loss = 0.0
+        for xb, yb in train_dl:
+            xb, yb = xb.to(device), yb.to(device)
+            optimizer.zero_grad()
+            loss = criterion(model(xb), yb)
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            t_loss += loss.item() * len(xb)
+        t_loss /= len(train_ds)
+
+        # ── validate ───────────────────────────────────────────────────────
+        model.eval()
+        v_loss = 0.0
+        with torch.no_grad():
+            for xb, yb in val_dl:
+                xb, yb = xb.to(device), yb.to(device)
+                v_loss += criterion(model(xb), yb).item() * len(xb)
+        v_loss /= len(val_ds)
+
+        train_losses.append(t_loss)
+        val_losses.append(v_loss)
+        scheduler.step(v_loss)
+
+        if epoch % 5 == 0 or epoch == 1:
+            print(f"  [LSTM] epoch {epoch:>3}/{MAX_EPOCHS}  "
+                  f"train_loss={t_loss:.6f}  val_loss={v_loss:.6f}")
+
+        # ── early stopping ─────────────────────────────────────────────────
+        if v_loss < best_val_loss - 1e-6:
+            best_val_loss = v_loss
+            best_state    = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            no_improve    = 0
+        else:
+            no_improve += 1
+            if no_improve >= PATIENCE:
+                print(f"  [LSTM] Early stopping at epoch {epoch} "
+                      f"(no improvement for {PATIENCE} epochs)")
+                break
+
+    model.load_state_dict(best_state)
+    print(f"  [LSTM] Best val_loss = {best_val_loss:.6f}")
 
     # Predict on test set — predictions start at index WINDOW_SIZE
     y_pred_mw      = predict_lstm(model, y_scaler, X_test, device=device)
-    y_test_aligned = y_test[WINDOW_SIZE:]   # align ground truth to same offset (still scaled)
+    y_test_aligned = y_test[WINDOW_SIZE:]   # align ground truth to same offset
 
-    # y_pred_mw is already in MW (predict_lstm calls y_scaler.inverse_transform)
-    # y_test_aligned is still scaled [0,1] — inverse-transform it to MW
-    y_test_mw = y_scaler.inverse_transform(y_test_aligned)
+    # CRITICAL: Inverse transform y_test ONLY ONCE
+    # y_test_aligned is scaled [0,1] from preprocessing
+    # y_pred_mw is already in MW (predict_lstm calls inverse_transform)
+    from src.evaluation import inverse_transform_predictions
+    if hasattr(y_scaler, 'inverse_transform') and hasattr(y_scaler, 'data_min_'):
+        # sklearn MinMaxScaler from preprocessing
+        y_test_mw = inverse_transform_predictions(y_test_aligned, y_scaler)
+    else:
+        # Internal MinMaxTargetScaler
+        y_test_mw = y_scaler.inverse_transform(y_test_aligned)
 
-    print(f"  Output y_pred_mw range: [{y_pred_mw.min():.2f}, {y_pred_mw.max():.2f}] MW")
-    print(f"  Output y_test_mw range: [{y_test_mw.min():.2f}, {y_test_mw.max():.2f}] MW")
+    print(f"  [LSTM] FINAL y_pred_mw range: [{y_pred_mw.min():.2f}, {y_pred_mw.max():.2f}] MW")
+    print(f"  [LSTM] FINAL y_test_mw range: [{y_test_mw.min():.2f}, {y_test_mw.max():.2f}] MW")
+    print(f"  [LSTM] Validation: Both arrays in MW units, ready for fair comparison")
 
     metrics = evaluate_lstm(y_test_mw, y_pred_mw)
     save_lstm(model, y_scaler, n_features)

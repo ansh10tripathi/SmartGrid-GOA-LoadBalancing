@@ -184,12 +184,17 @@ def main():
     print("\nStep 2.5: Training LSTM...")
     device = "cuda" if __import__("torch").cuda.is_available() else "cpu"
     print(f"  Using device: {device}")
+    
+    # CRITICAL: Pass target_scaler to LSTM for consistent scaling across all models
     lstm_metrics, lstm_pred, lstm_true, lstm_tl, lstm_vl = run_lstm_pipeline(
         X_train.values, y_train.values,
         X_test.values,  y_test.values,
+        target_scaler=target_scaler,  # SHARED scaler for fair comparison
         device=device,
     )
     print(f"  LSTM metrics: {lstm_metrics}")
+    print(f"  LSTM predictions: min={lstm_pred.min():.2f} MW, max={lstm_pred.max():.2f} MW")
+    print(f"  LSTM ground truth: min={lstm_true.min():.2f} MW, max={lstm_true.max():.2f} MW")
     all_metrics["LSTM"] = lstm_metrics
 
     # LSTM training curve
@@ -297,7 +302,7 @@ def main():
     # ── Step 2.8: Paper comparison table (uses saved model artefacts) ─────────
     print("\nStep 2.8: Building publication comparison table...")
     from src.paper_comparison import run_paper_comparison
-    run_paper_comparison(target_scaler=target_scaler)
+    run_paper_comparison(X_test=X_test, y_test=y_test, target_scaler=target_scaler)
 
     # ── Step 3: Leakage audit ───────────────────────────────────────────────
     print("\nStep 3: Running Leakage Audit...")
@@ -306,6 +311,14 @@ def main():
     # ── Step 4: GOA optimisation (best model predictions) ────────────────────
     print("\nStep 4: Running GOA Optimization (best model)...")
     # y_pred_mw is already in MW units from the inverse transform above
+    
+    # CRITICAL VALIDATION: Ensure predictions match test set length
+    assert len(y_pred_mw) == len(X_test), (
+        f"LEAKAGE DETECTED: y_pred_mw length ({len(y_pred_mw)}) != "
+        f"X_test length ({len(X_test)}). Predictions must be on test set only."
+    )
+    print(f"  [GOA] Validation passed: {len(y_pred_mw)} predictions == {len(X_test)} test samples")
+    
     price_test = test_df["tou_price"].values[:len(y_pred_mw)]
 
     goa_result     = grasshopper_optimization(

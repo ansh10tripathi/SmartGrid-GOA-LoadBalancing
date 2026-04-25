@@ -380,14 +380,21 @@ def _collect_metrics(X_test, y_test, target_scaler=None) -> dict:
     model, y_scaler = _load_lstm_model()
     if model is not None:
         from src.lstm_model import predict_lstm, WINDOW_SIZE
+        # CRITICAL: LSTM uses the SAME target_scaler as other models
         # X_test and y_test are both scaled from preprocessing
-        # predict_lstm returns MW-scale predictions (uses its own y_scaler)
-        y_pred_lstm_mw = predict_lstm(model, y_scaler, np.asarray(X_test), device="cpu")
+        # predict_lstm returns MW-scale predictions (uses target_scaler internally)
+        y_pred_lstm_mw = predict_lstm(model, target_scaler if target_scaler else y_scaler, 
+                                       np.asarray(X_test), device="cpu")
         # y_test is scaled [0,1] from preprocessing — inverse-transform to MW
         y_test_arr = np.asarray(y_test)
         y_test_mw_full = inverse_transform_predictions(y_test_arr, target_scaler) if target_scaler else y_test_arr
         # Align to LSTM's window offset
         y_true_lstm_mw = y_test_mw_full[WINDOW_SIZE:]
+        
+        print(f"  [LSTM] y_pred range: [{y_pred_lstm_mw.min():.2f}, {y_pred_lstm_mw.max():.2f}] MW")
+        print(f"  [LSTM] y_true range: [{y_true_lstm_mw.min():.2f}, {y_true_lstm_mw.max():.2f}] MW")
+        print(f"  [LSTM] Both in MW units - fair comparison with RF/XGB/SVR")
+        
         results["LSTM"] = _compute_four_metrics(y_true_lstm_mw, y_pred_lstm_mw)
         m = results["LSTM"]
         print(f"  {'LSTM':<16}  RMSE={m['RMSE (MW)']:.4f}  MAE={m['MAE (MW)']:.4f}"
