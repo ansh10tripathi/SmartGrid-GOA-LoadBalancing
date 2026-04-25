@@ -1,5 +1,5 @@
 Metric,Before GOA,After GOA,Change (%)
-Peak Load (MW),0.89,0.77,-13.04
-Total Cost ($),1005.32,925.04,-7.99
-PAR,3.2184,3.0361,-5.66
-Variance (MW²),0.02,0.02,-20.0
+Peak Load (MW),2820.65,2483.5,-11.95
+Total Cost ($),5457058.14,5040589.87,-7.63
+PAR,1.7905,1.703,-4.89
+Variance (MW²),85287.75,63125.27,-25.99
