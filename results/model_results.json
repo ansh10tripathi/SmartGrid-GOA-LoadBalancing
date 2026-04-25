@@ -6,10 +6,10 @@
     "MAPE": 1.3729
   },
   "SVR": {
-    "RMSE": 38.288,
-    "MAE": 32.081,
-    "R2": 0.9829,
-    "MAPE": 2.1142
+    "RMSE": 63.629,
+    "MAE": 53.143,
+    "R2": 0.9529,
+    "MAPE": 3.4321
   },
   "XGBoost": {
     "RMSE": 21.5,
@@ -18,10 +18,10 @@
     "MAPE": 1.0208
   },
   "LSTM": {
-    "RMSE": 0.0182,
-    "MAE": 0.0134,
-    "R2": 0.9839,
-    "MAPE": 6.0035
+    "RMSE": 36.525,
+    "MAE": 26.7899,
+    "R2": 0.9845,
+    "MAPE": 1.6801
   },
   "QuantileGBR": {
     "RMSE": 23.0048,
@@ -38,22 +38,22 @@
     "n_features": 22,
     "split_date": "2015-11-16 03:00:00",
     "goa": {
-      "peak_before": 0.885614812374115,
-      "peak_after": 0.7701218670495132,
-      "peak_pct": -13.04,
-      "cost_before": 1005.3234151910247,
-      "cost_after": 925.0368637733359,
-      "cost_pct": -7.99,
-      "par_before": 3.2183561402602447,
-      "par_after": 3.0360984139929923,
-      "var_before": 0.02049397863447666,
-      "var_after": 0.01644063634843229,
+      "peak_before": 2820.654296875,
+      "peak_after": 2483.4971735672457,
+      "peak_pct": -11.95,
+      "cost_before": 5457058.139641114,
+      "cost_after": 5040589.874363739,
+      "cost_pct": -7.63,
+      "par_before": 1.7904832130381967,
+      "par_after": 1.7030489576489622,
+      "var_before": 85287.75,
+      "var_after": 63125.27092196015,
       "best_model": "XGBoost",
-      "best_fitness": 0.9630215019939194,
-      "max_ramp_rate": 0.04127641982795267,
-      "grid_max": 0.9741762936115266,
-      "load_min": 0.013103814795613289,
-      "ramp_violations": 4722,
+      "best_fitness": 0.8879097430441542,
+      "max_ramp_rate": 236.30389589661002,
+      "grid_max": 3102.7197265625005,
+      "load_min": 635.1317138671875,
+      "ramp_violations": 167,
       "cap_violations": 0,
       "floor_violations": 0,
       "feasible": false
