@@ -27,6 +27,8 @@ sys.path.insert(0, _ROOT)
 
 
 def run_paper_comparison(
+    X_test=None,
+    y_test=None,
     target_scaler=None,
     caption: str = (
         "Performance comparison of forecasting models on the DUQ hourly "
@@ -36,24 +38,32 @@ def run_paper_comparison(
     label: str = "tab:model_comparison",
 ) -> pd.DataFrame:
     """
-    Full pipeline: load data -> load saved models -> metrics -> table -> chart.
+    Full pipeline: load saved models -> metrics -> table -> chart.
     Delegates entirely to evaluation.build_model_comparison_table.
 
-    If target_scaler is provided, all metrics are computed on original MW scale.
+    CRITICAL: X_test, y_test, and target_scaler MUST be passed from main.py
+    to ensure the same test set used during training is used for evaluation.
+    DO NOT call preprocess() here — that creates a new split and causes leakage.
+
+    Parameters
+    ----------
+    X_test        : test features (same split used during training)
+    y_test        : test targets (same split used during training)
+    target_scaler : scaler fitted on y_train only
+
     Returns the results DataFrame (rows = models, cols = metrics).
     """
-    from src.preprocessing import preprocess
-    from src.evaluation    import build_model_comparison_table
+    from src.evaluation import build_model_comparison_table
 
-    print("\n[paper_comparison] Loading and preprocessing data...")
-    _, X_test, _, y_test, _, saved_target_scaler, _, _ = \
-        preprocess(os.path.join(_ROOT, "dataset", "DUQ_hourly.csv"))
+    if X_test is None or y_test is None:
+        raise ValueError(
+            "X_test and y_test must be provided from main.py. "
+            "DO NOT call preprocess() here — use the same test set from training."
+        )
 
-    # Prefer the caller-supplied scaler; fall back to the one from preprocess
-    scaler_to_use = target_scaler if target_scaler is not None else saved_target_scaler
-
+    print("\n[paper_comparison] Using provided test set (no re-split).")
     return build_model_comparison_table(
-        X_test, y_test, target_scaler=scaler_to_use, caption=caption, label=label
+        X_test, y_test, target_scaler=target_scaler, caption=caption, label=label
     )
 
 
